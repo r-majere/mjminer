@@ -105,7 +105,9 @@ unsigned long long freespace(char *path) {
 
 // Free memory. Taken from http://stackoverflow.com/questions/2513505/how-to-get-available-memory-c-g
 unsigned long long freemem() {
-#ifdef _WIN32
+#if defined(__APPLE__)
+	return 0; // Not implemented
+#elif defined(_WIN32)
 	MEMORYSTATUSEX status;
 	status.dwLength = sizeof(status);
 	GlobalMemoryStatusEx(&status);

@@ -5,7 +5,11 @@ include osdetect.mk
 ifeq ($(OS_64BIT),1)
 $(info --- Compiling for 64-bit arch ---)
 CFLAGS += -m64
+ifeq ($(OS),Mac)
+SHABAL=shabal64-darwin
+else
 SHABAL=shabal64
+endif
 endif
 
 ifeq ($(OS_32BIT),1)
@@ -42,6 +46,9 @@ optimize:	optimize.c helper.o
 
 helper.o:	helper.c
 		gcc $(CFLAGS) -c -o helper.o helper.c		
+
+shabel64-darwin.o:	shabal64-darwin.s
+		gcc -Wall -m64 -c -o $@ $^
 
 shabal64.o:	shabal64.s
 		gcc -Wall -m64 -c -o $@ $^

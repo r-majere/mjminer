@@ -275,7 +275,11 @@ int main(int argc, char **argv) {
 	char name[100];
 	sprintf(name, "%s%llu_%llu_%u_%u", outputdir, addr, startnonce, nonces, staggersize);
 
+#ifdef __APPLE__
+	int ofd = open(name, O_CREAT | O_WRONLY, S_IRUSR | S_IWUSR | S_IRGRP | S_IROTH);
+#else
 	int ofd = open(name, O_CREAT | O_LARGEFILE | O_WRONLY, S_IRUSR | S_IWUSR | S_IRGRP | S_IROTH);
+#endif
 	if(ofd < 0) {
 		printf("Error opening file %s\n", name);
 		exit(0);

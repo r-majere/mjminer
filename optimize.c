@@ -180,7 +180,12 @@ int optimizeFile(char *filename, unsigned long long memory) {
 		for(j=0; j<blocks; j++) {
 			bytes = 0;
 			do {
-				lseek64(fh, ((unsigned long long int)j * stagger * PLOTSIZE) + ((unsigned long long int)i * stagger * SCOOP_SIZE) + bytes, SEEK_SET);
+#ifdef __APPLE__
+				lseek(
+#else
+				lseek64(
+#endif
+					fh, ((unsigned long long int)j * stagger * PLOTSIZE) + ((unsigned long long int)i * stagger * SCOOP_SIZE) + bytes, SEEK_SET);
 				unsigned long long found = (unsigned long long)read( fh, &(buffers[j])[bytes], (stagger * SCOOP_SIZE * ssize) - bytes);
 				bytes += found;
 			} while (bytes < stagger * SCOOP_SIZE * ssize);
@@ -219,7 +224,7 @@ int main(int argc, char **argv) {
         }
 
 	int file;
-#ifdef _WIN32
+#if defined(__APPLE__) || defined(_WIN32)
 	unsigned long long memory = 2000000000;
 #else
 	unsigned long long memory = freemem() * 0.8;
