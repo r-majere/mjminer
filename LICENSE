@@ -1,1 +1,11 @@
-Copyright 2014 r-majere
+rjminer by r-majere
+A fork of dcct_miner.
+
+Author of dcct_miner: Markus Tervooren <info@bchain.info>
+BURST-R5LP-KEL9-UYLG-GFG6T
+
+With code written by Uray Meiviar <uraymeiviar@gmail.com>
+BURST-8E8K-WQ2F-ZDZ5-FQWHX
+
+Implementation of Shabal is taken from:
+http://www.shabal.com/?p=198
