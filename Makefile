@@ -1,63 +1,54 @@
-CFLAGS=-D_FILE_OFFSET_BITS=64
+CFLAGS=$(OSFLAGS) -O2 -Wall -D_FILE_OFFSET_BITS=64
 
-linux64:	plot optimize mine mine_pool_all mine_pool_share
+include osdetect.mk
 
-linux32:	plot32 optimize32 mine32 mine_pool_all32 mine_pool_share32
+ifeq ($(OS_64BIT),1)
+$(info --- Compiling for 64-bit arch ---)
+CFLAGS += -m64
+SHABAL=shabal64
+endif
 
-win64:		optimize.exe
+ifeq ($(OS_32BIT),1)
+$(warning --- Compiling for 32-bit arch --- (NOT RECOMMENDED, THIS WILL AFFECT YOUR MAXIMUM PLOT SIZE))
+CFLAGS += -m32
+SHABAL=shabal32
+endif
 
-all:		linux64 linux32
+$(info CFLAGS=$(CFLAGS))
 
-dist:		linux64 linux32 win64
-		rm -f bin/* shabal64.o shabal32.o dcct_miner.tgz
-		mv plot optimize mine mine_pool_all plot32 optimize32 mine32 mine_pool_all32 mine_pool_share mine_pool_share32 optimize.exe bin
-		cp mine_uray.sh mine_dev_v1.sh mine_dev_v2.sh bin
-		tar -czf dcct_miner.tgz *
+ifeq ($(OS),Windows)
+all:		optimize.exe
+else
+all:		plot optimize mine mine_pool_all mine_pool_share
+endif
 
 optimize.exe:	optimize.c
-		x86_64-w64-mingw32-gcc-4.8 -D_FILE_OFFSET_BITS=64 -Wall -m64 -O2 -o optimize.exe optimize.c
+		x86_64-w64-mingw32-gcc-4.8 $(CFLAGS) -o $@ $^
 
-plot:		plot.c shabal64.o helper64.o
-		gcc -Wall -m64 -O2 -o plot plot.c shabal64.o helper64.o -lpthread
+plot:		plot.c $(SHABAL).o helper.o
+		gcc $(CFLAGS) -o $@ $^ -lpthread
 
-mine:		mine.c shabal64.o helper64.o
-		gcc -Wall -m64 -O2 -DSOLO -o mine mine.c shabal64.o helper64.o -lpthread
+mine:		mine.c $(SHABAL).o helper.o
+		gcc $(CFLAGS) -DSOLO -o $@ $^ -lpthread
 
-mine_pool_all:	mine.c shabal64.o helper64.o
-		gcc -Wall -m64 -O2 -DURAY_POOL -o mine_pool_all mine.c shabal64.o helper64.o -lpthread
+mine_pool_all:	mine.c $(SHABAL).o helper.o
+		gcc $(CFLAGS) -DURAY_POOL -o $@ $^ -lpthread
 
-mine_pool_share:	mine.c shabal64.o helper64.o
-		gcc -Wall -m64 -O2 -DSHARE_POOL -o mine_pool_share mine.c shabal64.o helper64.o -lpthread
+mine_pool_share:	mine.c $(SHABAL).o helper.o
+		gcc $(CFLAGS) -DSHARE_POOL -o $@ $^ -lpthread
 
-optimize:	optimize.c helper64.o
-		gcc -Wall -m64 -O2 -o optimize optimize.c helper64.o
+optimize:	optimize.c helper.o
+		gcc $(CFLAGS) -o $@ $^
 
-plot32:		plot.c shabal32.o helper32.o
-		gcc -Wall -m32 -O2 -o plot32 plot.c shabal32.o helper32.o -lpthread
-
-mine32:		mine.c shabal32.o helper32.o
-		gcc -Wall -m32 -O2 -DSOLO -o mine32 mine.c shabal32.o helper32.o -lpthread 
-
-mine_pool_all32:	mine.c shabal32.o helper32.o
-		gcc -Wall -m32 -O2 -DURAY_POOL -o mine_pool_all32 mine.c shabal32.o helper32.o -lpthread 
-
-mine_pool_share32:	mine.c shabal32.o helper32.o
-		gcc -Wall -m32 -O2 -DSHARE_POOL -o mine_pool_share32 mine.c shabal32.o helper32.o -lpthread 
-
-optimize32:	optimize.c helper32.o
-		gcc -Wall -m32 -O2 -o optimize32 optimize.c helper32.o
-
-helper64.o:	helper.c
-		gcc -Wall -m64 -c -O2 -o helper64.o helper.c		
-
-helper32.o:	helper.c
-		gcc -Wall -m32 -c -O2 -o helper32.o helper.c		
+helper.o:	helper.c
+		gcc $(CFLAGS) -c -o helper.o helper.c		
 
 shabal64.o:	shabal64.s
-		gcc -Wall -m64 -c -o shabal64.o shabal64.s
+		gcc -Wall -m64 -c -o $@ $^
 
 shabal32.o:	shabal32.s
-		gcc -Wall -m32 -c -o shabal32.o shabal32.s
+		gcc -Wall -m32 -c -o $@ $^
 
 clean:
-		rm -f shabal64.o shabal32.o helper64.o helper32.o plot plot32 optimize optimize32 mine mine32 mine_pool_all mine_pool_all32 mine_pool_share mine_pool_share32 helper32.o helper64.o optimize.exe dcct_miner.tgz
+		rm -f shabal64.o shabal32.o helper.o plot optimize mine mine_pool_all mine_pool_share optimize.exe
+
