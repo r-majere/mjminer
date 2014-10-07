@@ -7,6 +7,14 @@
 	http://www.shabal.com/?p=198
 
 	Usage: ./plot <public key> <start nonce> <nonces> <stagger size> <threads>
+
+        Changes:
+
+        2014.10.07 - Added code for mshabal/mshabal256 (SSE4/AVX2 optimizations)
+        by Cerr Janror <cerr.janror@gmail.com> : https://github.com/BurstTools/BurstSoftware.git
+        Ported to Linux by: Mirkic7 <mirkic7@hotmail.com>
+        Burst: BURST-RQW7-3HNW-627D-3GAEV
+
 */
 
 #define _GNU_SOURCE
@@ -23,6 +31,10 @@
 #include <sys/time.h>
 
 #include "shabal.h"
+#ifdef AVX2
+#include "mshabal256.h"
+#endif
+#include "mshabal.h"
 #include "helper.h"
 
 // Leave 5GB free space
@@ -34,29 +46,256 @@
 #define HASH_SIZE	32
 #define HASH_CAP	4096
 
+struct thread_data
+{
+	unsigned long long nonceoffset;
+	char *gendata1;
+	char *gendata2;
+	char *gendata3;
+	char *gendata4;
+	char *gendata5;
+	char *gendata6;
+	char *gendata7;
+	char *gendata8;
+};
+
 unsigned long long addr = 0;
 unsigned long long startnonce = 0;
 unsigned int nonces = 0;
 unsigned int staggersize = 0;
 unsigned int threads = 0;
 unsigned int noncesperthread;
+unsigned int selecttype = 0;
+
 
 char *cache;
 char *outputdir = DEFAULTDIR;
+
+#define BYTE_AT(val, at) (((char *)&(val))[at])
+// ARM version
+//define BYTE_AT(val, at) (((val) >> ((at) * 8)) && 0xff)
+
+#define SET_NONCE(gendata, nonce) \
+  gendata[PLOT_SIZE + 8] = BYTE_AT(nonce, 7); \
+  gendata[PLOT_SIZE + 9] = BYTE_AT(nonce, 6); \
+  gendata[PLOT_SIZE + 10] = BYTE_AT(nonce, 5); \
+  gendata[PLOT_SIZE + 11] = BYTE_AT(nonce, 4); \
+  gendata[PLOT_SIZE + 12] = BYTE_AT(nonce, 3); \
+  gendata[PLOT_SIZE + 13] = BYTE_AT(nonce, 2); \
+  gendata[PLOT_SIZE + 14] = BYTE_AT(nonce, 1); \
+  gendata[PLOT_SIZE + 15] = BYTE_AT(nonce, 0)
+
+void thread_data_init(struct thread_data *d)
+{
+	memset(d, 0, sizeof(*d));
+}
+
+void thread_data_cleanup(struct thread_data *d)
+{
+	free(d->gendata1);
+	free(d->gendata2);
+	free(d->gendata3);
+	free(d->gendata4);
+	free(d->gendata5);
+	free(d->gendata6);
+	free(d->gendata7);
+	free(d->gendata8);
+}
+
+#ifdef AVX2
+int m256nonce(struct thread_data *data, unsigned long long int addr,
+    unsigned long long int nonce1, unsigned long long int nonce2, unsigned long long int nonce3, unsigned long long int nonce4,
+    unsigned long long int nonce5, unsigned long long int nonce6, unsigned long long int nonce7, unsigned long long int nonce8,
+    unsigned long long cachepos1, unsigned long long cachepos2, unsigned long long cachepos3, unsigned long long cachepos4,
+    unsigned long long cachepos5, unsigned long long cachepos6, unsigned long long cachepos7, unsigned long long cachepos8)
+{
+    char final1[32], final2[32], final3[32], final4[32];
+    char final5[32], final6[32], final7[32], final8[32];
+    char *gendata1 = data->gendata1;
+    char *gendata2 = data->gendata2;
+    char *gendata3 = data->gendata3;
+    char *gendata4 = data->gendata4;
+    char *gendata5 = data->gendata5;
+    char *gendata6 = data->gendata6;
+    char *gendata7 = data->gendata7;
+    char *gendata8 = data->gendata8;
+
+    gendata1[PLOT_SIZE    ] = BYTE_AT(addr, 7);
+    gendata1[PLOT_SIZE + 1] = BYTE_AT(addr, 6);
+    gendata1[PLOT_SIZE + 2] = BYTE_AT(addr, 5);
+    gendata1[PLOT_SIZE + 3] = BYTE_AT(addr, 4);
+    gendata1[PLOT_SIZE + 4] = BYTE_AT(addr, 3);
+    gendata1[PLOT_SIZE + 5] = BYTE_AT(addr, 2);
+    gendata1[PLOT_SIZE + 6] = BYTE_AT(addr, 1);
+    gendata1[PLOT_SIZE + 7] = BYTE_AT(addr, 0);
+
+    for (int i = PLOT_SIZE; i <= PLOT_SIZE + 7; ++i)
+    {
+      gendata2[i] = gendata1[i];
+      gendata3[i] = gendata1[i];
+      gendata4[i] = gendata1[i];
+      gendata5[i] = gendata1[i];
+      gendata6[i] = gendata1[i];
+      gendata7[i] = gendata1[i];
+      gendata8[i] = gendata1[i];
+    }
+
+    SET_NONCE(gendata1, nonce1);
+    SET_NONCE(gendata2, nonce2);
+    SET_NONCE(gendata3, nonce3);
+    SET_NONCE(gendata4, nonce4);
+    SET_NONCE(gendata5, nonce5);
+    SET_NONCE(gendata6, nonce6);
+    SET_NONCE(gendata7, nonce7);
+    SET_NONCE(gendata8, nonce8);
+
+    mshabal256_context x;
+    int i, len;
+
+    for (i = PLOT_SIZE; i > 0; i -= HASH_SIZE)
+    {
+
+      mshabal256_init(&x, 256);
+
+      len = PLOT_SIZE + 16 - i;
+      if (len > HASH_CAP)
+        len = HASH_CAP;
+
+      mshabal256(&x, &gendata1[i], &gendata2[i], &gendata3[i], &gendata4[i], &gendata5[i], &gendata6[i], &gendata7[i], &gendata8[i], len);
+      mshabal256_close(&x, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+        &gendata1[i - HASH_SIZE], &gendata2[i - HASH_SIZE], &gendata3[i - HASH_SIZE], &gendata4[i - HASH_SIZE],
+        &gendata5[i - HASH_SIZE], &gendata6[i - HASH_SIZE], &gendata7[i - HASH_SIZE], &gendata8[i - HASH_SIZE]);
+
+    }
+
+    mshabal256_init(&x, 256);
+    mshabal256(&x, gendata1, gendata2, gendata3, gendata4, gendata5, gendata6, gendata7, gendata8, 16 + PLOT_SIZE);
+    mshabal256_close(&x, 0, 0, 0, 0, 0, 0, 0, 0, 0, final1, final2, final3, final4, final5, final6, final7, final8);
+
+    // XOR with final
+    for (i = 0; i < PLOT_SIZE; i++)
+    {
+      gendata1[i] ^= (final1[i % 32]);
+      gendata2[i] ^= (final2[i % 32]);
+      gendata3[i] ^= (final3[i % 32]);
+      gendata4[i] ^= (final4[i % 32]);
+      gendata5[i] ^= (final5[i % 32]);
+      gendata6[i] ^= (final6[i % 32]);
+      gendata7[i] ^= (final7[i % 32]);
+      gendata8[i] ^= (final8[i % 32]);
+    }
+
+    // Sort them:
+    for (i = 0; i < PLOT_SIZE; i += 64)
+    {
+      memmove(&cache[cachepos1 * 64 + (unsigned long long)i * staggersize], &gendata1[i], 64);
+      memmove(&cache[cachepos2 * 64 + (unsigned long long)i * staggersize], &gendata2[i], 64);
+      memmove(&cache[cachepos3 * 64 + (unsigned long long)i * staggersize], &gendata3[i], 64);
+      memmove(&cache[cachepos4 * 64 + (unsigned long long)i * staggersize], &gendata4[i], 64);
+      memmove(&cache[cachepos5 * 64 + (unsigned long long)i * staggersize], &gendata5[i], 64);
+      memmove(&cache[cachepos6 * 64 + (unsigned long long)i * staggersize], &gendata6[i], 64);
+      memmove(&cache[cachepos7 * 64 + (unsigned long long)i * staggersize], &gendata7[i], 64);
+      memmove(&cache[cachepos8 * 64 + (unsigned long long)i * staggersize], &gendata8[i], 64);
+    }
+
+    return 0;
+}
+#endif
+
+int mnonce(struct thread_data *data, unsigned long long int addr,
+    unsigned long long int nonce1, unsigned long long int nonce2, unsigned long long int nonce3, unsigned long long int nonce4,
+    unsigned long long cachepos1, unsigned long long cachepos2, unsigned long long cachepos3, unsigned long long cachepos4)
+{
+    char final1[32], final2[32], final3[32], final4[32];
+    char *gendata1 = data->gendata1; // preallocated, should be 16 + PLOT_SIZE
+    char *gendata2 = data->gendata2;
+    char *gendata3 = data->gendata3;
+    char *gendata4 = data->gendata4;
+
+    gendata1[PLOT_SIZE    ] = BYTE_AT(addr, 7);
+    gendata1[PLOT_SIZE + 1] = BYTE_AT(addr, 6);
+    gendata1[PLOT_SIZE + 2] = BYTE_AT(addr, 5);
+    gendata1[PLOT_SIZE + 3] = BYTE_AT(addr, 4);
+    gendata1[PLOT_SIZE + 4] = BYTE_AT(addr, 3);
+    gendata1[PLOT_SIZE + 5] = BYTE_AT(addr, 2);
+    gendata1[PLOT_SIZE + 6] = BYTE_AT(addr, 1);
+    gendata1[PLOT_SIZE + 7] = BYTE_AT(addr, 0);
+
+    for (int i = PLOT_SIZE; i <= PLOT_SIZE + 7; ++i)
+    {
+      gendata2[i] = gendata1[i];
+      gendata3[i] = gendata1[i];
+      gendata4[i] = gendata1[i];
+    }
+
+    SET_NONCE(gendata1, nonce1);
+    SET_NONCE(gendata2, nonce2);
+    SET_NONCE(gendata3, nonce3);
+    SET_NONCE(gendata4, nonce4);
+
+    mshabal_context x;
+    int i, len;
+
+    for (i = PLOT_SIZE; i > 0; i -= HASH_SIZE)
+    {
+
+      sse4_mshabal_init(&x, 256);
+
+      len = PLOT_SIZE + 16 - i;
+      if (len > HASH_CAP)
+        len = HASH_CAP;
+
+      sse4_mshabal(&x, &gendata1[i], &gendata2[i], &gendata3[i], &gendata4[i], len);
+      sse4_mshabal_close(&x, 0, 0, 0, 0, 0, &gendata1[i - HASH_SIZE], &gendata2[i - HASH_SIZE], &gendata3[i - HASH_SIZE], &gendata4[i - HASH_SIZE]);
+
+    }
+
+    sse4_mshabal_init(&x, 256);
+    sse4_mshabal(&x, gendata1, gendata2, gendata3, gendata4, 16 + PLOT_SIZE);
+    sse4_mshabal_close(&x, 0, 0, 0, 0, 0, final1, final2, final3, final4);
+
+    // XOR with final
+    for (i = 0; i < PLOT_SIZE; i++)
+    {
+      gendata1[i] ^= (final1[i % 32]);
+      gendata2[i] ^= (final2[i % 32]);
+      gendata3[i] ^= (final3[i % 32]);
+      gendata4[i] ^= (final4[i % 32]);
+    }
+
+    // Sort them:
+    for (i = 0; i < PLOT_SIZE; i += 64)
+    {
+      memmove(&cache[cachepos1 * 64 + (unsigned long long)i * staggersize], &gendata1[i], 64);
+      memmove(&cache[cachepos2 * 64 + (unsigned long long)i * staggersize], &gendata2[i], 64);
+      memmove(&cache[cachepos3 * 64 + (unsigned long long)i * staggersize], &gendata3[i], 64);
+      memmove(&cache[cachepos4 * 64 + (unsigned long long)i * staggersize], &gendata4[i], 64);
+    }
+
+    return 0;
+}
 
 void nonce(unsigned long long int addr, unsigned long long int nonce, unsigned long long cachepos) {
 	char final[32];
 	char gendata[16 + PLOT_SIZE];
 
-	char *xv = (char*)&addr;
-	
-	gendata[PLOT_SIZE] = xv[7]; gendata[PLOT_SIZE+1] = xv[6]; gendata[PLOT_SIZE+2] = xv[5]; gendata[PLOT_SIZE+3] = xv[4];
-	gendata[PLOT_SIZE+4] = xv[3]; gendata[PLOT_SIZE+5] = xv[2]; gendata[PLOT_SIZE+6] = xv[1]; gendata[PLOT_SIZE+7] = xv[0];
+	gendata[PLOT_SIZE] = BYTE_AT(addr, 7);
+	gendata[PLOT_SIZE+1] = BYTE_AT(addr, 6);
+	gendata[PLOT_SIZE+2] = BYTE_AT(addr, 5);
+	gendata[PLOT_SIZE+3] = BYTE_AT(addr, 4);
+	gendata[PLOT_SIZE+4] = BYTE_AT(addr, 3);
+	gendata[PLOT_SIZE+5] = BYTE_AT(addr, 2);
+	gendata[PLOT_SIZE+6] = BYTE_AT(addr, 1);
+	gendata[PLOT_SIZE+7] = BYTE_AT(addr, 0);
 
-	xv = (char*)&nonce;
-
-	gendata[PLOT_SIZE+8] = xv[7]; gendata[PLOT_SIZE+9] = xv[6]; gendata[PLOT_SIZE+10] = xv[5]; gendata[PLOT_SIZE+11] = xv[4];
-	gendata[PLOT_SIZE+12] = xv[3]; gendata[PLOT_SIZE+13] = xv[2]; gendata[PLOT_SIZE+14] = xv[1]; gendata[PLOT_SIZE+15] = xv[0];
+	gendata[PLOT_SIZE+8] = BYTE_AT(nonce, 7);
+	gendata[PLOT_SIZE+9] = BYTE_AT(nonce, 6);
+	gendata[PLOT_SIZE+10] = BYTE_AT(nonce, 5);
+	gendata[PLOT_SIZE+11] = BYTE_AT(nonce, 4);
+	gendata[PLOT_SIZE+12] = BYTE_AT(nonce, 3);
+	gendata[PLOT_SIZE+13] = BYTE_AT(nonce, 2);
+	gendata[PLOT_SIZE+14] = BYTE_AT(nonce, 1);
+	gendata[PLOT_SIZE+15] = BYTE_AT(nonce, 0);
 
 	shabal_context x;
 	int i, len;
@@ -92,12 +331,52 @@ void nonce(unsigned long long int addr, unsigned long long int nonce, unsigned l
 }
 
 void *work_i(void *x_void_ptr) {
-	unsigned long long *x_ptr = (unsigned long long *)x_void_ptr;
-	unsigned long long i = *x_ptr;
+	struct thread_data *data = (struct thread_data *)x_void_ptr;
+	unsigned long long i = data->nonceoffset;
 
 	unsigned int n;
-        for(n=0; n<noncesperthread; n++)
-                nonce(addr,(i + n), (unsigned long long)(i - startnonce + n));
+	if (selecttype == 1) {
+		for(n=0; n<noncesperthread; n++) {
+			if (n + 4 < noncesperthread) {
+				mnonce(data, addr,
+					(i + n + 0), (i + n + 1), (i + n + 2), (i + n + 3),
+					(unsigned long long)(i - startnonce + n + 0),
+					(unsigned long long)(i - startnonce + n + 1),
+					(unsigned long long)(i - startnonce + n + 2),
+					(unsigned long long)(i - startnonce + n + 3));
+
+				n += 3;
+			} else {
+				nonce(addr,(i + n), (unsigned long long)(i - startnonce + n));
+			}
+		}
+#ifdef AVX2
+	} else if (selecttype == 2) {
+		for(n=0; n<noncesperthread; n++) {
+			if (n + 8 < noncesperthread)
+			{
+			    m256nonce(data, addr,
+			      (i + n + 0), (i + n + 1), (i + n + 2), (i + n + 3),
+			      (i + n + 4), (i + n + 5), (i + n + 6), (i + n + 7),
+			      (unsigned long long)(i - startnonce + n + 0),
+			      (unsigned long long)(i - startnonce + n + 1),
+			      (unsigned long long)(i - startnonce + n + 2),
+			      (unsigned long long)(i - startnonce + n + 3),
+			      (unsigned long long)(i - startnonce + n + 4),
+			      (unsigned long long)(i - startnonce + n + 5),
+			      (unsigned long long)(i - startnonce + n + 6),
+			      (unsigned long long)(i - startnonce + n + 7));
+
+			    n += 7;
+			} else {
+			    nonce(addr,(i + n), (unsigned long long)(i - startnonce + n));
+			}
+		}
+#endif
+	} else {
+		for(n=0; n<noncesperthread; n++)
+			nonce(addr,(i + n), (unsigned long long)(i - startnonce + n));
+	}
 
 	return NULL;
 }
@@ -109,7 +388,14 @@ unsigned long long getMS() {
 }
 
 void usage(char **argv) {
-	printf("Usage: %s -k KEY [-d DIRECTORY] [-s STARTNONCE] [-n NONCES] [-m STAGGERSIZE] [-t THREADS]\n", argv[0]);
+	printf("Usage: %s -k KEY [ -x CORE ] [-d DIRECTORY] [-s STARTNONCE] [-n NONCES] [-m STAGGERSIZE] [-t THREADS]\n", argv[0]);
+	printf("   CORE:\n");
+	printf("     0 - default core\n");
+	printf("     1 - SSE4 core\n");
+#ifdef AVX2
+	printf("     2 - AVX2 core\n");
+#endif
+
 	exit(-1);
 }
 
@@ -178,6 +464,9 @@ int main(int argc, char **argv) {
 				case 't':
 					threads = parsed;
 					break;
+				case 'x':
+					selecttype = parsed;
+					break;
 				case 'd':
 					ds = strlen(parse);
 					outputdir = (char*) malloc(ds + 2);
@@ -193,6 +482,17 @@ int main(int argc, char **argv) {
 			}			
 		}
         }
+
+	if (selecttype == 1)
+		 printf("Using SSE4 core.\n");
+#ifdef AVX2
+	else if(selecttype == 2)
+		printf("Using AVX2 core.\n");
+#endif
+	else {
+		printf("Using original algorithm (no SSE4, no AVX2).\n");
+		selecttype=0;
+	}
 
 	if(addr == 0)
 		usage(argv);
@@ -294,16 +594,36 @@ int main(int argc, char **argv) {
 	}
 
 	pthread_t worker[threads];
-	unsigned long long nonceoffset[threads];
+	struct thread_data data[threads];
+	for(i = 0; i < threads; i++) {
+		thread_data_init(&data[i]);
+		// selecttype 0 uses stack for gendata
+		// stack is limited to 8192 (hard limit 64k) bytes on MacOS, so use malloc for SSE4/AVX2 version
+		if (selecttype == 1) {
+			data[i].gendata1 = malloc(16 + PLOT_SIZE);
+			data[i].gendata2 = malloc(16 + PLOT_SIZE);
+			data[i].gendata3 = malloc(16 + PLOT_SIZE);
+			data[i].gendata4 = malloc(16 + PLOT_SIZE);
+		} else if (selecttype == 2) {
+			data[i].gendata1 = malloc(16 + PLOT_SIZE);
+			data[i].gendata2 = malloc(16 + PLOT_SIZE);
+			data[i].gendata3 = malloc(16 + PLOT_SIZE);
+			data[i].gendata4 = malloc(16 + PLOT_SIZE);
+			data[i].gendata5 = malloc(16 + PLOT_SIZE);
+			data[i].gendata6 = malloc(16 + PLOT_SIZE);
+			data[i].gendata7 = malloc(16 + PLOT_SIZE);
+			data[i].gendata8 = malloc(16 + PLOT_SIZE);
+		}
+	}
 
 	int run;
-	
+
 	for(run = 0; run < nonces; run += staggersize) {
 		unsigned long long starttime = getMS();
 		for(i = 0; i < threads; i++) {
-			nonceoffset[i] = startnonce + i * noncesperthread;
+			data[i].nonceoffset = startnonce + i * noncesperthread;
 
-			if(pthread_create(&worker[i], NULL, work_i, &nonceoffset[i])) {
+			if(pthread_create(&worker[i], NULL, work_i, &data[i])) {
 				printf("Error creating thread. Out of memory? Try lower stagger size / less threads\n");
 				exit(-1);
 			}
@@ -341,8 +661,11 @@ int main(int argc, char **argv) {
 
 		startnonce += staggersize;
 	}
-	
+
 	close(ofd);
+
+	for(i = 0; i < threads; i++)
+		thread_data_cleanup(&data[i]);
 
 	printf("\nFinished plotting.\n");
 	return 0;
