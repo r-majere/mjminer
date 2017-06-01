@@ -646,7 +646,6 @@ int main(int argc, char **argv) {
 	int run;
 
 	for(run = 0; run < nonces; run += staggersize) {
-		unsigned long long starttime = getMS();
 		for(i = 0; i < threads; i++) {
 			data[i].nonceoffset = startnonce + i * noncesperthread;
 			data[i].completed = 0;
@@ -658,7 +657,9 @@ int main(int argc, char **argv) {
 		}
 
 		// Track progress
+		unsigned long long prevMs = getMS();
 		unsigned long long completed = 0;
+		unsigned long long prevCompleted = 0;
 		do {
 			usleep(1000000);
 
@@ -667,19 +668,22 @@ int main(int argc, char **argv) {
 				completed += data[i].completed;
 			}
 			
-			unsigned long long ms = getMS() - starttime;
+			unsigned long long ms = getMS() - prevMs;
 			if (ms == 0 || completed == 0) {
 				continue;
 			}
 
 			float percent = completed * 100.0 / nonces;
-			float speed = completed * 60000000.0 / ms;
+			float speed = (completed - prevCompleted) * 60000000.0 / ms;
 			int m = (int)(nonces - completed) / speed;
 			int h = (int)(m / 60);
 			m -= h * 60;
 
 			printf("\r%.2f%% completed, %.0f nonces/minute, %i:%02i left                ", percent, speed, h, m);
 			fflush(stdout);
+
+			prevMs += ms;
+			prevCompleted = completed;
 		}
 		while (completed < nonces);
 
