@@ -50,6 +50,7 @@
 struct thread_data
 {
 	unsigned long long nonceoffset;
+	volatile unsigned long long completed;
 	char *gendata1;
 	char *gendata2;
 	char *gendata3;
@@ -338,6 +339,7 @@ void *work_i(void *x_void_ptr) {
 	unsigned int n;
 	if (selecttype == 1) {
 		for(n=0; n<noncesperthread; n++) {
+			data->completed = n;
 			if (n + 4 < noncesperthread) {
 				mnonce(data, addr,
 					(i + n + 0), (i + n + 1), (i + n + 2), (i + n + 3),
@@ -350,10 +352,12 @@ void *work_i(void *x_void_ptr) {
 			} else {
 				nonce(addr,(i + n), (unsigned long long)(i - startnonce + n));
 			}
+			data->completed = n + 1;
 		}
 #ifdef AVX2
 	} else if (selecttype == 2) {
 		for(n=0; n<noncesperthread; n++) {
+			data->completed = n;
 			if (n + 8 < noncesperthread)
 			{
 			    m256nonce(data, addr,
@@ -372,11 +376,15 @@ void *work_i(void *x_void_ptr) {
 			} else {
 			    nonce(addr,(i + n), (unsigned long long)(i - startnonce + n));
 			}
+			data->completed = n + 1;
 		}
 #endif
 	} else {
-		for(n=0; n<noncesperthread; n++)
+		for(n=0; n<noncesperthread; n++) {
+			data->completed = n;
 			nonce(addr,(i + n), (unsigned long long)(i - startnonce + n));
+			data->completed = n + 1;
+		}
 	}
 
 	return NULL;
@@ -641,12 +649,39 @@ int main(int argc, char **argv) {
 		unsigned long long starttime = getMS();
 		for(i = 0; i < threads; i++) {
 			data[i].nonceoffset = startnonce + i * noncesperthread;
+			data[i].completed = 0;
 
 			if(pthread_create(&worker[i], NULL, work_i, &data[i])) {
 				printf("Error creating thread. Out of memory? Try lower stagger size / less threads\n");
 				exit(-1);
 			}
 		}
+
+		// Track progress
+		unsigned long long completed = 0;
+		do {
+			usleep(1000000);
+
+			completed = 0;
+			for(i = 0; i < threads; i++) {
+				completed += data[i].completed;
+			}
+			
+			unsigned long long ms = getMS() - starttime;
+			if (ms == 0 || completed == 0) {
+				continue;
+			}
+
+			float percent = completed * 100.0 / nonces;
+			float speed = completed * 60000000.0 / ms;
+			int m = (int)(nonces - completed) / speed;
+			int h = (int)(m / 60);
+			m -= h * 60;
+
+			printf("\r%.2f%% completed, %.0f nonces/minute, %i:%02i left                ", percent, speed, h, m);
+			fflush(stdout);
+		}
+		while (completed < nonces);
 
 		// Wait for Threads to finish;
 		for(i=0; i<threads; i++) {
@@ -667,18 +702,6 @@ int main(int argc, char **argv) {
 				bytes -= b;
 			} while(bytes > 0);
 		}
-
-		unsigned long long ms = getMS() - starttime;
-		
-		int percent = (int)(100 * run / nonces);
-		double minutes = (double)ms / (1000000 * 60);
-		int speed = (int)(staggersize / minutes);
-		int m = (int)(nonces - run) / speed;
-		int h = (int)(m / 60);
-		m -= h * 60;
-
-		printf("\r%i Percent done. %i nonces/minute, %i:%02i left                ", percent, speed, h, m);
-		fflush(stdout);
 
 		startnonce += staggersize;
 	}
