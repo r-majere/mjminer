@@ -493,13 +493,7 @@ int main(int argc, char **argv) {
 		}
         }
 
-    int is_mapped = 0;
-    if (staggersize == 0) {
-    	staggersize = nonces;
-    	is_mapped = 1;
-    }
-
-	if (selecttype == 1)
+    if (selecttype == 1)
 		 printf("Using SSE4 core.\n");
 #ifdef AVX2
 	else if(selecttype == 2)
@@ -537,23 +531,10 @@ int main(int argc, char **argv) {
 	}
 
 	// Autodetect stagger size
-	if(staggersize == 0) {
-		// use 80% of memory
-		unsigned long long memstag = (freemem() * 0.8) / PLOT_SIZE;
-
-		if(nonces < memstag) {
-			// Small stack: all at once
-			staggersize = nonces;
-		} else {
-			// Determine stagger that (almost) fits nonces
-			for(i = memstag; i >= 1000; i--) {
-				if( (nonces % i) < 1000) {
-					staggersize = i;
-					nonces-= (nonces % i);
-					i = 0;
-				}
-			}
-		}
+	int is_mapped = 0;
+    if(staggersize == 0) {
+		staggersize = nonces;
+    	is_mapped = 1;
 	}
 
 	// 32 Bit and above 4GB?
@@ -669,7 +650,7 @@ int main(int argc, char **argv) {
 			}
 			
 			unsigned long long ms = getMS() - prevMs;
-			if (ms == 0 || completed == 0) {
+			if (ms == 0 || completed == 0 || completed == prevCompleted) {
 				continue;
 			}
 
@@ -685,7 +666,7 @@ int main(int argc, char **argv) {
 			prevMs += ms;
 			prevCompleted = completed;
 		}
-		while (completed < nonces);
+		while (completed < (i + 1) * noncesperthread * threads);
 
 		// Wait for Threads to finish;
 		for(i=0; i<threads; i++) {
