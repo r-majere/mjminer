@@ -602,36 +602,23 @@ int main(int argc, char **argv) {
     if (is_mapped) {
 	    ftruncate(ofd, 0);
 #ifdef HAVE_FALLOCATE
-		int ret = fallocate(ofd, 0, 0, cache_size);
+	    printf("Using fallocate to expand file size\n");
+		int ret = fallocate(ofd, FALLOC_FL_UNSHARE, 0, cache_size);
 		if (ret == -1) {
 			printf("Failed to expand file to size %llu (errno %d - %s).\n", cache_size, errno, strerror(errno));
 			exit(-1);
 		}
 #elif defined(HAVE_POSIX_FALLOCATE)
+		printf("Using posix_fallocate to expand file size\n");
 		int ret = posix_fallocate(ofd, 0, cache_size);
 		if (ret == -1) {
 			printf("Failed to expand file to size %llu (errno %d - %s).\n", cache_size, errno, strerror(errno));
 			exit(-1);
 		}
 #elif defined(__APPLE__)
-	    fstore_t store = {F_ALLOCATECONTIG, F_PEOFPOSMODE, 0, cache_size, 0};
-	    int ret = fcntl(ofd, F_PREALLOCATE, &store);
-		if(ret == -1) {
-			store.fst_flags = F_ALLOCATEALL;
-		    ret = fcntl(ofd, F_PREALLOCATE, &store);
-		}
-		if(ret == -1) { // read fcntl docs - must test against -1
-			printf("Failed to expand file to size %llu (errno %d - %s).\n", cache_size, errno, strerror(errno));
-			exit(-1);
-		}
-		struct stat sb;
-		ret = fstat(ofd, &sb);
-		if(ret != 0) {
-			printf("Failed to write to file to establish the size.\n");
-			exit(-1);
-		}
+		printf("Using fcntl::F_SETSIZE to expand file size\n");
 		unsigned long long result_size = cache_size;
-		ret = fcntl(ofd, F_SETSIZE, &result_size);
+		int ret = fcntl(ofd, F_SETSIZE, &result_size);
       	if(ret == -1) {
 			printf("Failed set size %llu (errno %d - %s).\n", cache_size, errno, strerror(errno));
 			exit(-1);
