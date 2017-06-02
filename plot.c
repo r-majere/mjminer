@@ -26,6 +26,7 @@
 #include <sys/types.h>
 #include <sys/stat.h>
 #include <fcntl.h>
+#include <errno.h>
 #include <pthread.h>
 #include <time.h>
 #include <sys/time.h>
@@ -398,7 +399,7 @@ unsigned long long getMS() {
 
 void usage(char **argv) {
 	printf("Usage: %s -k KEY [-x CORE] [-d DIRECTORY] [-s STARTNONCE] [-n NONCES] [-m STAGGERSIZE] [-t THREADS]\n", argv[0]);
-	printf(" STAGGERSIZE: 0 for optimized file\n");
+	printf(" STAGGERSIZE: 0 for optimized file (sudo needed)\n");
 	printf("        CORE:\n");
 	printf("          0 - default core\n");
 	printf("          1 - SSE4 core\n");
@@ -414,6 +415,7 @@ int main(int argc, char **argv) {
 		usage(argv);
 
 	int i;
+	int stagger_presented = 0;
 	int startgiven = 0;
         for(i = 1; i < argc; i++) {
 		// Ignore unknown argument
@@ -465,6 +467,7 @@ int main(int argc, char **argv) {
 					}	
 					break;
 				case 'm':
+					stagger_presented = 1;
 					if(modified == 1) {
 						staggersize = (unsigned long long)(parsed / PLOT_SIZE);
 					} else {
@@ -531,8 +534,28 @@ int main(int argc, char **argv) {
 	}
 
 	// Autodetect stagger size
+	if(staggersize == 0 && !stagger_presented) {
+		// use 80% of memory
+		unsigned long long memstag = (freemem() * 0.8) / PLOT_SIZE;
+
+		if(nonces < memstag) {
+			// Small stack: all at once
+			staggersize = nonces;
+		} else {
+			// Determine stagger that (almost) fits nonces
+			for(i = memstag; i >= 1000; i--) {
+				if( (nonces % i) < 1000) {
+					staggersize = i;
+					nonces-= (nonces % i);
+					i = 0;
+				}
+			}
+		}
+	}
+
+	// Zero stagger for mapping
 	int is_mapped = 0;
-    if(staggersize == 0) {
+    if(staggersize == 0 && stagger_presented) {
 		staggersize = nonces;
     	is_mapped = 1;
 	}
@@ -578,7 +601,42 @@ int main(int argc, char **argv) {
     unsigned long long cache_size = (unsigned long long) nonces * PLOT_SIZE;
     if (is_mapped) {
 	    ftruncate(ofd, 0);
-		ftruncate(ofd, cache_size);
+#ifdef HAVE_FALLOCATE
+		int ret = fallocate(ofd, 0, 0, cache_size);
+		if (ret == -1) {
+			printf("Failed to expand file to size %llu (errno %d - %s).\n", cache_size, errno, strerror(errno));
+			exit(-1);
+		}
+#elif defined(HAVE_POSIX_FALLOCATE)
+		int ret = posix_fallocate(ofd, 0, cache_size);
+		if (ret == -1) {
+			printf("Failed to expand file to size %llu (errno %d - %s).\n", cache_size, errno, strerror(errno));
+			exit(-1);
+		}
+#elif defined(__APPLE__)
+	    fstore_t store = {F_ALLOCATECONTIG, F_PEOFPOSMODE, 0, cache_size, 0};
+	    int ret = fcntl(ofd, F_PREALLOCATE, &store);
+		if(ret == -1) {
+			store.fst_flags = F_ALLOCATEALL;
+		    ret = fcntl(ofd, F_PREALLOCATE, &store);
+		}
+		if(ret == -1) { // read fcntl docs - must test against -1
+			printf("Failed to expand file to size %llu (errno %d - %s).\n", cache_size, errno, strerror(errno));
+			exit(-1);
+		}
+		struct stat sb;
+		ret = fstat(ofd, &sb);
+		if(ret != 0) {
+			printf("Failed to write to file to establish the size.\n");
+			exit(-1);
+		}
+		unsigned long long result_size = cache_size;
+		ret = fcntl(ofd, F_SETSIZE, &result_size);
+      	if(ret == -1) {
+			printf("Failed set size %llu (errno %d - %s).\n", cache_size, errno, strerror(errno));
+			exit(-1);
+		}
+#endif
 		cache = mmap(NULL, cache_size, PROT_READ|PROT_WRITE, MAP_SHARED, ofd, 0);
 	    close(ofd);
 		if(cache == 0) {
@@ -648,7 +706,7 @@ int main(int argc, char **argv) {
 			for(i = 0; i < threads; i++) {
 				completed += data[i].completed;
 			}
-			
+
 			unsigned long long ms = getMS() - prevMs;
 			if (ms == 0 || completed == 0 || completed == prevCompleted) {
 				continue;
