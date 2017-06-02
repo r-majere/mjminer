@@ -623,6 +623,9 @@ int main(int argc, char **argv) {
 			printf("Failed set size %llu (errno %d - %s).\n", cache_size, errno, strerror(errno));
 			exit(-1);
 		}
+#else
+		printf("Using ftruncate to expand file size\n");
+		ftruncate(ofd, cache_size);
 #endif
 		cache = mmap(NULL, cache_size, PROT_READ|PROT_WRITE, MAP_SHARED, ofd, 0);
 	    close(ofd);
