@@ -26,9 +26,11 @@
 #include <sys/types.h>
 #include <sys/stat.h>
 #include <fcntl.h>
+#include <errno.h>
 #include <pthread.h>
 #include <time.h>
 #include <sys/time.h>
+#include <sys/mman.h>
 
 #include "shabal.h"
 #ifdef AVX2
@@ -49,6 +51,7 @@
 struct thread_data
 {
 	unsigned long long nonceoffset;
+	volatile unsigned long long completed;
 	char *gendata1;
 	char *gendata2;
 	char *gendata3;
@@ -337,6 +340,7 @@ void *work_i(void *x_void_ptr) {
 	unsigned int n;
 	if (selecttype == 1) {
 		for(n=0; n<noncesperthread; n++) {
+			data->completed = n;
 			if (n + 4 < noncesperthread) {
 				mnonce(data, addr,
 					(i + n + 0), (i + n + 1), (i + n + 2), (i + n + 3),
@@ -349,10 +353,12 @@ void *work_i(void *x_void_ptr) {
 			} else {
 				nonce(addr,(i + n), (unsigned long long)(i - startnonce + n));
 			}
+			data->completed = n + 1;
 		}
 #ifdef AVX2
 	} else if (selecttype == 2) {
 		for(n=0; n<noncesperthread; n++) {
+			data->completed = n;
 			if (n + 8 < noncesperthread)
 			{
 			    m256nonce(data, addr,
@@ -371,11 +377,15 @@ void *work_i(void *x_void_ptr) {
 			} else {
 			    nonce(addr,(i + n), (unsigned long long)(i - startnonce + n));
 			}
+			data->completed = n + 1;
 		}
 #endif
 	} else {
-		for(n=0; n<noncesperthread; n++)
+		for(n=0; n<noncesperthread; n++) {
+			data->completed = n;
 			nonce(addr,(i + n), (unsigned long long)(i - startnonce + n));
+			data->completed = n + 1;
+		}
 	}
 
 	return NULL;
@@ -388,12 +398,13 @@ unsigned long long getMS() {
 }
 
 void usage(char **argv) {
-	printf("Usage: %s -k KEY [ -x CORE ] [-d DIRECTORY] [-s STARTNONCE] [-n NONCES] [-m STAGGERSIZE] [-t THREADS]\n", argv[0]);
-	printf("   CORE:\n");
-	printf("     0 - default core\n");
-	printf("     1 - SSE4 core\n");
+	printf("Usage: %s -k KEY [-x CORE] [-d DIRECTORY] [-s STARTNONCE] [-n NONCES] [-m STAGGERSIZE] [-t THREADS]\n", argv[0]);
+	printf(" STAGGERSIZE: 0 for optimized file (sudo needed)\n");
+	printf("        CORE:\n");
+	printf("          0 - default core\n");
+	printf("          1 - SSE4 core\n");
 #ifdef AVX2
-	printf("     2 - AVX2 core\n");
+	printf("          2 - AVX2 core\n");
 #endif
 
 	exit(-1);
@@ -404,6 +415,7 @@ int main(int argc, char **argv) {
 		usage(argv);
 
 	int i;
+	int stagger_presented = 0;
 	int startgiven = 0;
         for(i = 1; i < argc; i++) {
 		// Ignore unknown argument
@@ -455,6 +467,7 @@ int main(int argc, char **argv) {
 					}	
 					break;
 				case 'm':
+					stagger_presented = 1;
 					if(modified == 1) {
 						staggersize = (unsigned long long)(parsed / PLOT_SIZE);
 					} else {
@@ -483,7 +496,7 @@ int main(int argc, char **argv) {
 		}
         }
 
-	if (selecttype == 1)
+    if (selecttype == 1)
 		 printf("Using SSE4 core.\n");
 #ifdef AVX2
 	else if(selecttype == 2)
@@ -521,7 +534,7 @@ int main(int argc, char **argv) {
 	}
 
 	// Autodetect stagger size
-	if(staggersize == 0) {
+	if(staggersize == 0 && !stagger_presented) {
 		// use 80% of memory
 		unsigned long long memstag = (freemem() * 0.8) / PLOT_SIZE;
 
@@ -538,6 +551,13 @@ int main(int argc, char **argv) {
 				}
 			}
 		}
+	}
+
+	// Zero stagger for mapping
+	int is_mapped = 0;
+    if(staggersize == 0 && stagger_presented) {
+		staggersize = nonces;
+    	is_mapped = 1;
 	}
 
 	// 32 Bit and above 4GB?
@@ -563,26 +583,62 @@ int main(int argc, char **argv) {
 		exit(-1);
 	}
 
-	cache = calloc( PLOT_SIZE, staggersize );
-
-	if(cache == NULL) {
-		printf("Error allocating memory. Try lower stagger size.\n");
-		exit(-1);
-	}
-
 	mkdir(outputdir, S_IRUSR | S_IWUSR | S_IXUSR | S_IRGRP | S_IROTH);
 
 	char name[100];
 	sprintf(name, "%s%llu_%llu_%u_%u", outputdir, addr, startnonce, nonces, staggersize);
 
 #ifdef __APPLE__
-	int ofd = open(name, O_CREAT | O_WRONLY, S_IRUSR | S_IWUSR | S_IRGRP | S_IROTH);
+	int ofd = open(name, O_CREAT | O_RDWR, S_IRUSR | S_IWUSR | S_IRGRP | S_IROTH);
 #else
-	int ofd = open(name, O_CREAT | O_LARGEFILE | O_WRONLY, S_IRUSR | S_IWUSR | S_IRGRP | S_IROTH);
+	int ofd = open(name, O_CREAT | O_LARGEFILE | O_RDWR, S_IRUSR | S_IWUSR | S_IRGRP | S_IROTH);
 #endif
 	if(ofd < 0) {
 		printf("Error opening file %s\n", name);
 		exit(0);
+	}
+
+    unsigned long long cache_size = (unsigned long long) nonces * PLOT_SIZE;
+    if (is_mapped) {
+	    ftruncate(ofd, 0);
+#ifdef HAVE_FALLOCATE
+	    printf("Using fallocate to expand file size\n");
+		int ret = fallocate(ofd, FALLOC_FL_UNSHARE, 0, cache_size);
+		if (ret == -1) {
+			printf("Failed to expand file to size %llu (errno %d - %s).\n", cache_size, errno, strerror(errno));
+			exit(-1);
+		}
+#elif defined(HAVE_POSIX_FALLOCATE)
+		printf("Using posix_fallocate to expand file size\n");
+		int ret = posix_fallocate(ofd, 0, cache_size);
+		if (ret == -1) {
+			printf("Failed to expand file to size %llu (errno %d - %s).\n", cache_size, errno, strerror(errno));
+			exit(-1);
+		}
+#elif defined(__APPLE__)
+		printf("Using fcntl::F_SETSIZE to expand file size\n");
+		unsigned long long result_size = cache_size;
+		int ret = fcntl(ofd, F_SETSIZE, &result_size);
+      	if(ret == -1) {
+			printf("Failed set size %llu (errno %d - %s).\n", cache_size, errno, strerror(errno));
+			exit(-1);
+		}
+#else
+		printf("Using ftruncate to expand file size\n");
+		ftruncate(ofd, cache_size);
+#endif
+		cache = mmap(NULL, cache_size, PROT_READ|PROT_WRITE, MAP_SHARED, ofd, 0);
+	    close(ofd);
+		if(cache == MAP_FAILED) {
+			printf("Error mapping file %s\n", name);
+			exit(0);
+		}
+	} else {
+		cache = calloc( PLOT_SIZE, staggersize );
+		if(cache == NULL) {
+			printf("Error allocating memory. Try lower stagger size.\n");
+			exit(-1);
+		}
 	}
 
 	// Threads:
@@ -619,15 +675,44 @@ int main(int argc, char **argv) {
 	int run;
 
 	for(run = 0; run < nonces; run += staggersize) {
-		unsigned long long starttime = getMS();
 		for(i = 0; i < threads; i++) {
 			data[i].nonceoffset = startnonce + i * noncesperthread;
+			data[i].completed = 0;
 
 			if(pthread_create(&worker[i], NULL, work_i, &data[i])) {
 				printf("Error creating thread. Out of memory? Try lower stagger size / less threads\n");
 				exit(-1);
 			}
 		}
+
+		// Track progress
+		unsigned long long prevMs = getMS();
+		unsigned long long completed = (run / staggersize) * noncesperthread * threads;
+		unsigned long long prevCompleted = (run / staggersize) * noncesperthread * threads;
+		do {
+			usleep(1000000);
+
+			completed = (run / staggersize) * noncesperthread * threads;
+			for(i = 0; i < threads; i++) {
+				completed += data[i].completed;
+			}
+
+			unsigned long long ms = getMS() - prevMs;
+			if (ms > 0 && completed != prevCompleted) {
+				float percent = completed * 100.0 / nonces;
+				float speed = (completed - prevCompleted) * 60000000.0 / ms;
+				int m = (int)(nonces - completed) / speed;
+				int h = (int)(m / 60);
+				m -= h * 60;
+
+				printf("\r%.2f%% completed, %.0f nonces/minute, %i:%02i left                  ", percent, speed, h, m);
+				fflush(stdout);
+			}
+
+			prevMs += ms;
+			prevCompleted = completed;
+		}
+		while (completed < (run / staggersize + 1) * noncesperthread * threads);
 
 		// Wait for Threads to finish;
 		for(i=0; i<threads; i++) {
@@ -638,31 +723,25 @@ int main(int argc, char **argv) {
 		for(i=threads * noncesperthread; i<staggersize; i++)
 			nonce(addr, startnonce + i, (unsigned long long)i);
 
-		// Write plot to disk:
-		unsigned long long bytes = (unsigned long long) staggersize * PLOT_SIZE;
-		unsigned long long position = 0;
-		do {
-			int b = write(ofd, &cache[position], bytes > 100000000 ? 100000000 : bytes);	// Dont write more than 100MB at once
-			position += b;
-			bytes -= b;
-		} while(bytes > 0);
-
-		unsigned long long ms = getMS() - starttime;
-		
-		int percent = (int)(100 * run / nonces);
-		double minutes = (double)ms / (1000000 * 60);
-		int speed = (int)(staggersize / minutes);
-		int m = (int)(nonces - run) / speed;
-		int h = (int)(m / 60);
-		m -= h * 60;
-
-		printf("\r%i Percent done. %i nonces/minute, %i:%02i left                ", percent, speed, h, m);
-		fflush(stdout);
+		if (!is_mapped) {
+			// Write plot to disk:
+			unsigned long long bytes = (unsigned long long) staggersize * PLOT_SIZE;
+			unsigned long long position = 0;
+			do {
+				int b = write(ofd, &cache[position], bytes > 100000000 ? 100000000 : bytes);	// Dont write more than 100MB at once
+				position += b;
+				bytes -= b;
+			} while(bytes > 0);
+		}
 
 		startnonce += staggersize;
 	}
 
-	close(ofd);
+	if (is_mapped) {
+		munmap(cache, cache_size);
+	} else {
+		close(ofd);
+	}
 
 	for(i = 0; i < threads; i++)
 		thread_data_cleanup(&data[i]);
