@@ -629,7 +629,7 @@ int main(int argc, char **argv) {
 #endif
 		cache = mmap(NULL, cache_size, PROT_READ|PROT_WRITE, MAP_SHARED, ofd, 0);
 	    close(ofd);
-		if(cache == 0) {
+		if(cache == MAP_FAILED) {
 			printf("Error mapping file %s\n", name);
 			exit(0);
 		}
@@ -687,34 +687,32 @@ int main(int argc, char **argv) {
 
 		// Track progress
 		unsigned long long prevMs = getMS();
-		unsigned long long completed = 0;
-		unsigned long long prevCompleted = 0;
+		unsigned long long completed = (run / staggersize) * noncesperthread * threads;
+		unsigned long long prevCompleted = (run / staggersize) * noncesperthread * threads;
 		do {
 			usleep(1000000);
 
-			completed = 0;
+			completed = (run / staggersize) * noncesperthread * threads;
 			for(i = 0; i < threads; i++) {
 				completed += data[i].completed;
 			}
 
 			unsigned long long ms = getMS() - prevMs;
-			if (ms == 0 || completed == 0 || completed == prevCompleted) {
-				continue;
+			if (ms > 0 && completed != prevCompleted) {
+				float percent = completed * 100.0 / nonces;
+				float speed = (completed - prevCompleted) * 60000000.0 / ms;
+				int m = (int)(nonces - completed) / speed;
+				int h = (int)(m / 60);
+				m -= h * 60;
+
+				printf("\r%.2f%% completed, %.0f nonces/minute, %i:%02i left                  ", percent, speed, h, m);
+				fflush(stdout);
 			}
-
-			float percent = completed * 100.0 / nonces;
-			float speed = (completed - prevCompleted) * 60000000.0 / ms;
-			int m = (int)(nonces - completed) / speed;
-			int h = (int)(m / 60);
-			m -= h * 60;
-
-			printf("\r%.2f%% completed, %.0f nonces/minute, %i:%02i left                ", percent, speed, h, m);
-			fflush(stdout);
 
 			prevMs += ms;
 			prevCompleted = completed;
 		}
-		while (completed < (i + 1) * noncesperthread * threads);
+		while (completed < (run / staggersize + 1) * noncesperthread * threads);
 
 		// Wait for Threads to finish;
 		for(i=0; i<threads; i++) {
