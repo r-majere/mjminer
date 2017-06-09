@@ -384,6 +384,30 @@ void *work_i(void *x_void_ptr) {
 	return NULL;
 }
 
+void write_file(int ofd, unsigned long long start) {
+	int i;
+	for (i = 0; i < HASH_CAP; i++) {
+		unsigned long long pos = (i * (unsigned long long)nonces + start) * SCOOP_SIZE;
+		unsigned long long ret = lseek(ofd, pos, SEEK_SET);
+		if (ret == -1 || ret != pos) {
+			printf("Error while file lseek (errno %d - %s).\n", errno, strerror(errno));
+			exit(-1);
+		}
+		int bytes_to_write = staggersize * SCOOP_SIZE;
+		int bytes_offset = 0;
+		while (bytes_to_write) {
+			unsigned long long offset = (unsigned long long)i * staggersize * SCOOP_SIZE + bytes_offset;
+			ret = write(ofd, cache_write + offset, bytes_to_write);
+			if (ret == -1) {
+				printf("Error while file write (errno %d - %s).\n", errno, strerror(errno));
+				exit(-1);
+			}
+			bytes_to_write -= ret;
+			bytes_offset += ret;
+		}
+	}
+}
+
 unsigned long long getMS() {
 	struct timeval time;
 	gettimeofday(&time, NULL);
@@ -595,21 +619,21 @@ int main(int argc, char **argv) {
     unsigned long long file_size = ((unsigned long long) nonces) * PLOT_SIZE;
     ftruncate(ofd, 0);
 #ifdef HAVE_FALLOCATE
-    printf("Using fallocate to expand file size to %lluGB\n", file_size/1024/1024);
+    printf("Using fallocate to expand file size to %lluGB\n", file_size/1024/1024/1024);
 	int ret = fallocate(ofd, FALLOC_FL_UNSHARE, 0, file_size);
 	if (ret == -1) {
 		printf("Failed to expand file to size %llu (errno %d - %s).\n", file_size, errno, strerror(errno));
 		exit(-1);
 	}
 #elif defined(HAVE_POSIX_FALLOCATE)
-	printf("Using posix_fallocate to expand file size to %lluGB\n", file_size/1024/1024);
+	printf("Using posix_fallocate to expand file size to %lluGB\n", file_size/1024/1024/1024);
 	int ret = posix_fallocate(ofd, 0, file_size);
 	if (ret == -1) {
 		printf("Failed to expand file to size %llu (errno %d - %s).\n", file_size, errno, strerror(errno));
 		exit(-1);
 	}
 #elif defined(__APPLE__)
-	printf("Using fcntl::F_SETSIZE to expand file size to %lluGB\n", file_size/1024/1024);
+	printf("Using fcntl::F_SETSIZE to expand file size to %lluGB\n", file_size/1024/1024/1024);
 	unsigned long long result_size = file_size;
 	int ret = fcntl(ofd, F_SETSIZE, &result_size);
   	if(ret == -1) {
@@ -617,7 +641,7 @@ int main(int argc, char **argv) {
 		exit(-1);
 	}
 #else
-	printf("Using ftruncate to expand file size to %lluGB\n", file_size/1024/1024);
+	printf("Using ftruncate to expand file size to %lluGB\n", file_size/1024/1024/1024);
 	ftruncate(ofd, file_size);
 #endif
 	
@@ -654,7 +678,9 @@ int main(int argc, char **argv) {
 
 	int need_to_write_cache = 0;
 
-	for(startnonce = 0; startnonce < nonces; startnonce += staggersize) {
+	unsigned long long origin = startnonce;
+	unsigned long long finish = startnonce + nonces;
+	for(; startnonce < finish; startnonce += staggersize) {
 		unsigned long long starttime = getMS();
 		for(i = 0; i < threads; i++) {
 			data[i].nonceoffset = startnonce + i * noncesperthread;
@@ -673,15 +699,7 @@ int main(int argc, char **argv) {
 		// Write plot to disk:
 		if (need_to_write_cache) {
 			need_to_write_cache = 0;
-			for (i = 0; i < HASH_CAP; i++) {
-				unsigned long long pos = (i*nonces + startnonce - staggersize) * SCOOP_SIZE;
-				int ret = lseek(ofd, pos, SEEK_SET);
-				if (ret == -1) {
-					printf("Error in lseek (errno %d - %s).\n", errno, strerror(errno));
-					exit(-1);
-				}
-				write(ofd, &cache_write[i * staggersize * SCOOP_SIZE], staggersize * SCOOP_SIZE);
-			}
+			write_file(ofd, startnonce - staggersize - origin);
 		}
 
 		// Wait for Threads to finish;
@@ -695,10 +713,10 @@ int main(int argc, char **argv) {
 		need_to_write_cache = 1;
 
 		unsigned long long ms = getMS() - starttime;
-		float percent = 100.0 * (startnonce + staggersize) / nonces;
+		float percent = 100.0 * (startnonce - origin + staggersize) / nonces;
 		double minutes = (double)ms / (1000000 * 60);
 		int speed = (int)(staggersize / minutes);
-		int m = (int)(nonces - startnonce) / speed;
+		int m = (int)(origin + nonces - startnonce) / speed;
 		int h = (int)(m / 60);
 		m -= h * 60;
 
@@ -709,15 +727,7 @@ int main(int argc, char **argv) {
 	// Write plot to disk:
 	if (need_to_write_cache) {
 		need_to_write_cache = 0;
-		for (i = 0; i < HASH_CAP; i++) {
-			unsigned long long pos = (i*nonces + startnonce - staggersize) * SCOOP_SIZE;
-			int ret = lseek(ofd, pos, SEEK_SET);
-			if (ret == -1) {
-				printf("Error in lseek (errno %d - %s).\n", errno, strerror(errno));
-				exit(-1);
-			}
-			write(ofd, &cache_write[i * staggersize * SCOOP_SIZE], staggersize * SCOOP_SIZE);
-		}
+		write_file(ofd, startnonce - staggersize - origin);
 	}
 
 	close(ofd);
