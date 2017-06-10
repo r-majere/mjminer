@@ -617,9 +617,9 @@ int main(int argc, char **argv) {
 	}
 
     unsigned long long file_size = ((unsigned long long) nonces) * PLOT_SIZE;
-    ftruncate(ofd, 0);
 #ifdef HAVE_FALLOCATE
     printf("Using fallocate to expand file size to %lluGB\n", file_size/1024/1024/1024);
+	ftruncate(ofd, 0);
 	int ret = fallocate(ofd, FALLOC_FL_UNSHARE, 0, file_size);
 	if (ret == -1) {
 		printf("Failed to expand file to size %llu (errno %d - %s).\n", file_size, errno, strerror(errno));
@@ -627,6 +627,7 @@ int main(int argc, char **argv) {
 	}
 #elif defined(HAVE_POSIX_FALLOCATE)
 	printf("Using posix_fallocate to expand file size to %lluGB\n", file_size/1024/1024/1024);
+	ftruncate(ofd, 0);
 	int ret = posix_fallocate(ofd, 0, file_size);
 	if (ret == -1) {
 		printf("Failed to expand file to size %llu (errno %d - %s).\n", file_size, errno, strerror(errno));
