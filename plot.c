@@ -388,7 +388,13 @@ void write_file(int ofd, unsigned long long start) {
 	int i;
 	for (i = 0; i < HASH_CAP; i++) {
 		unsigned long long pos = (i * (unsigned long long)nonces + start) * SCOOP_SIZE;
-		unsigned long long ret = lseek(ofd, pos, SEEK_SET);
+		unsigned long long ret = 
+#ifdef __APPLE__
+		lseek(
+#else
+		lseek64(
+#endif
+			    ofd, pos, SEEK_SET);
 		if (ret == -1 || ret != pos) {
 			printf("Error while file lseek (errno %d - %s).\n", errno, strerror(errno));
 			exit(-1);
