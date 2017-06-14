@@ -421,7 +421,7 @@ unsigned long long getMS() {
 }
 
 void usage(char **argv) {
-	printf("Usage: %s -k KEY [ -x CORE ] [-d DIRECTORY] [-s STARTNONCE] [-n NONCES] [-m STAGGERSIZE] [-t THREADS]\n", argv[0]);
+	printf("Usage: %s -k KEY [-x CORE] [-d DIRECTORY] [-s STARTNONCE] [-n NONCES] [-m STAGGERSIZE] [-t THREADS] [-r RESTORE]\n", argv[0]);
 	printf("   CORE:\n");
 	printf("     0 - default core\n");
 	printf("     1 - SSE4 core\n");
@@ -437,6 +437,7 @@ int main(int argc, char **argv) {
 		usage(argv);
 
 	int i;
+	int restore_step = 0;
 	int startgiven = 0;
         for(i = 1; i < argc; i++) {
 		// Ignore unknown argument
@@ -511,7 +512,10 @@ int main(int argc, char **argv) {
 					} else {
 						outputdir[ds] = 0;
 					}
-					
+					break;
+				case 'r':
+					restore_step = parsed;
+					break;
 			}			
 		}
         }
@@ -575,6 +579,9 @@ int main(int argc, char **argv) {
 
 	staggersize /= 2; // Split on two parts for generation and writing to file simultaneously
 	printf("Total generation steps: %i\n", nonces / staggersize);
+	if (restore_step) {
+		printf("Restoring from step: %i\n", restore_step);
+	}
 
 	// 32 Bit and above 4GB?
 	if( sizeof( void* ) < 8 ) {
@@ -687,7 +694,7 @@ int main(int argc, char **argv) {
 
 	unsigned long long origin = startnonce;
 	unsigned long long finish = startnonce + nonces;
-	for(; startnonce < finish; startnonce += staggersize) {
+	for(startnonce = origin + restore_step*staggersize; startnonce < finish; startnonce += staggersize) {
 		unsigned long long starttime = getMS();
 		for(i = 0; i < threads; i++) {
 			data[i].nonceoffset = startnonce + i * noncesperthread;
@@ -726,8 +733,8 @@ int main(int argc, char **argv) {
 		int m = (int)(origin + nonces - startnonce) / speed;
 		int h = (int)(m / 60);
 		m -= h * 60;
-
-		printf("\r%.2f%% Percent done. %i nonces/minute, %i:%02i left                ", percent, speed, h, m);
+		
+		printf("\r%.2f%% Percent done. %i nonces/minute, %i:%02i left (can restore from step %llu)               ", percent, speed, h, m, (startnonce - origin)/staggersize);
 		fflush(stdout);
 	}
 
