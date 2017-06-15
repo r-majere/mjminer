@@ -412,6 +412,11 @@ void write_file(int ofd, unsigned long long start) {
 			bytes_offset += ret;
 		}
 	}
+
+	int ret = fsync(ofd);
+	if (ret == -1) {
+		printf("Error while file fsync (errno %d - %s).\n", errno, strerror(errno));
+	}
 }
 
 unsigned long long getMS() {
