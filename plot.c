@@ -634,6 +634,10 @@ int main(int argc, char **argv) {
 		exit(0);
 	}
 
+	// Disable buffering
+	FILE *file = fdopen(ofd, "a");
+	setvbuf(file, NULL, _IONBF, 0);
+
 	// Threads:
 	noncesperthread = (unsigned long)(staggersize / threads);
 
