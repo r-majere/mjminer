@@ -629,36 +629,6 @@ int main(int argc, char **argv) {
 		exit(0);
 	}
 
-    unsigned long long file_size = ((unsigned long long) nonces) * PLOT_SIZE;
-#ifdef HAVE_FALLOCATE
-    printf("Using fallocate to expand file size to %lluGB\n", file_size/1024/1024/1024);
-	ftruncate(ofd, 0);
-	int ret = fallocate(ofd, FALLOC_FL_UNSHARE, 0, file_size);
-	if (ret == -1) {
-		printf("Failed to expand file to size %llu (errno %d - %s).\n", file_size, errno, strerror(errno));
-		exit(-1);
-	}
-#elif defined(HAVE_POSIX_FALLOCATE)
-	printf("Using posix_fallocate to expand file size to %lluGB\n", file_size/1024/1024/1024);
-	ftruncate(ofd, 0);
-	int ret = posix_fallocate(ofd, 0, file_size);
-	if (ret == -1) {
-		printf("Failed to expand file to size %llu (errno %d - %s).\n", file_size, errno, strerror(errno));
-		exit(-1);
-	}
-#elif defined(__APPLE__)
-	printf("Using fcntl::F_SETSIZE to expand file size to %lluGB\n", file_size/1024/1024/1024);
-	unsigned long long result_size = file_size;
-	int ret = fcntl(ofd, F_SETSIZE, &result_size);
-  	if(ret == -1) {
-		printf("Failed set size %llu (errno %d - %s).\n", file_size, errno, strerror(errno));
-		exit(-1);
-	}
-#else
-	printf("Using ftruncate to expand file size to %lluGB\n", file_size/1024/1024/1024);
-	ftruncate(ofd, file_size);
-#endif
-	
 	// Threads:
 	noncesperthread = (unsigned long)(staggersize / threads);
 
