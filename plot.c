@@ -638,6 +638,71 @@ int main(int argc, char **argv) {
 	FILE *file = fdopen(ofd, "a");
 	setvbuf(file, NULL, _IONBF, 0);
 
+	unsigned long long current_file_size = 
+#ifdef __APPLE__
+		lseek(
+#else
+		lseek64(
+#endif
+			    ofd, 0, SEEK_END);
+	if (current_file_size == -1) {
+		printf("Error while file lseek (errno %d - %s).\n", errno, strerror(errno));
+		exit(-1);
+	}
+
+	unsigned long long file_size = ((unsigned long long) nonces) * PLOT_SIZE;
+	unsigned long long chunkSize = nonces * SCOOP_SIZE;
+
+	if (current_file_size % chunkSize) {
+		current_file_size = current_file_size / chunkSize * chunkSize;
+		ftruncate(ofd, current_file_size);
+	}
+
+	if (current_file_size == file_size) {
+		printf("File size is already ok!\n");
+	} else {
+#ifdef HAVE_FALLOCATE
+		printf("Using fallocate to expand file size to %lluGB", file_size/1024/1024/1024);
+#elif defined(HAVE_POSIX_FALLOCATE)
+		printf("Using posix_fallocate to expand file size to %lluGB\n", file_size/1024/1024/1024);
+#elif defined(__APPLE__)
+		printf("Using fcntl::F_SETSIZE to expand file size to %lluGB\n", file_size/1024/1024/1024);
+#else
+		printf("Using ftruncate to expand file size to %lluGB\n", file_size/1024/1024/1024);
+#endif
+	}
+
+	unsigned long long off;
+	for (off = current_file_size; off < file_size; off += chunkSize) {
+		printf("\rResizing file to %llu of %llu (%.2f)", off + chunkSize, file_size, (off + chunkSize) * 100.0 / file_size);
+#ifdef HAVE_FALLOCATE
+		int ret = fallocate(ofd, FALLOC_FL_UNSHARE, off, chunkSize);
+		if (ret == -1) {
+			printf("Failed to expand file to size %llu (errno %d - %s).\n", off + chunkSize, errno, strerror(errno));
+			exit(-1);
+		}
+#elif defined(HAVE_POSIX_FALLOCATE)
+		int ret = posix_fallocate(ofd, off, chunkSize);
+		if (ret == -1) {
+			printf("Failed to expand file to size %llu (errno %d - %s).\n", off + chunkSize, errno, strerror(errno));
+			exit(-1);
+		}
+#elif defined(__APPLE__)
+		unsigned long long result_size = off + chunkSize;
+		int ret = fcntl(ofd, F_SETSIZE, &result_size);
+			if(ret == -1) {
+			printf("Failed set size %llu (errno %d - %s).\n", result_size, errno, strerror(errno));
+			exit(-1);
+		}
+#else
+		ftruncate(ofd, file_size);
+#endif
+	}
+
+	if (current_file_size != file_size) {
+		printf(" Done!\n");
+	}
+
 	// Threads:
 	noncesperthread = (unsigned long)(staggersize / threads);
 
