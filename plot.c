@@ -661,33 +661,17 @@ int main(int argc, char **argv) {
 	if (current_file_size == file_size) {
 		printf("File size is already ok!\n");
 	} else {
-#ifdef HAVE_FALLOCATE
-		printf("Using fallocate to expand file size to %lluGB", file_size/1024/1024/1024);
-#elif defined(HAVE_POSIX_FALLOCATE)
-		printf("Using posix_fallocate to expand file size to %lluGB\n", file_size/1024/1024/1024);
-#elif defined(__APPLE__)
+#if defined(__APPLE__)
 		printf("Using fcntl::F_SETSIZE to expand file size to %lluGB\n", file_size/1024/1024/1024);
 #else
-		printf("Using ftruncate to expand file size to %lluGB\n", file_size/1024/1024/1024);
+		printf("Using fallocate to expand file size to %lluGB", file_size/1024/1024/1024);
 #endif
 	}
 
 	unsigned long long off;
 	for (off = current_file_size; off < file_size; off += chunkSize) {
 		printf("\rResizing file to %llu of %llu (%.2f)", off + chunkSize, file_size, (off + chunkSize) * 100.0 / file_size);
-#ifdef HAVE_FALLOCATE
-		int ret = fallocate(ofd, FALLOC_FL_UNSHARE, off, chunkSize);
-		if (ret == -1) {
-			printf("Failed to expand file to size %llu (errno %d - %s).\n", off + chunkSize, errno, strerror(errno));
-			exit(-1);
-		}
-#elif defined(HAVE_POSIX_FALLOCATE)
-		int ret = posix_fallocate(ofd, off, chunkSize);
-		if (ret == -1) {
-			printf("Failed to expand file to size %llu (errno %d - %s).\n", off + chunkSize, errno, strerror(errno));
-			exit(-1);
-		}
-#elif defined(__APPLE__)
+#if defined(__APPLE__)
 		unsigned long long result_size = off + chunkSize;
 		int ret = fcntl(ofd, F_SETSIZE, &result_size);
 			if(ret == -1) {
@@ -695,7 +679,11 @@ int main(int argc, char **argv) {
 			exit(-1);
 		}
 #else
-		ftruncate(ofd, off + chunkSize);
+		int ret = fallocate(ofd, FALLOC_FL_ZERO_RANGE | FALLOC_FL_INSERT_RANGE | , off, chunkSize);
+		if (ret == -1) {
+			printf("Failed to expand file to size %llu (errno %d - %s).\n", off + chunkSize, errno, strerror(errno));
+			exit(-1);
+		}
 #endif
 	}
 
