@@ -695,7 +695,7 @@ int main(int argc, char **argv) {
 			exit(-1);
 		}
 #else
-		ftruncate(ofd, file_size);
+		ftruncate(ofd, off + chunkSize);
 #endif
 	}
 
