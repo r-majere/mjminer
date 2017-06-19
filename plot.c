@@ -625,18 +625,14 @@ int main(int argc, char **argv) {
 	sprintf(name, "%s%llu_%llu_%u_%u", outputdir, addr, startnonce, nonces, nonces);
 
 #ifdef __APPLE__
-	int ofd = open(name, O_CREAT | O_RDWR, S_IRUSR | S_IWUSR | S_IRGRP | S_IROTH);
+	int ofd = open(name, O_CREAT | O_WRONLY, S_IRUSR | S_IWUSR | S_IRGRP | S_IROTH);
 #else
-	int ofd = open(name, O_CREAT | O_LARGEFILE | O_RDWR, S_IRUSR | S_IWUSR | S_IRGRP | S_IROTH);
+	int ofd = open(name, O_CREAT | O_LARGEFILE | O_WRONLY, S_IRUSR | S_IWUSR | S_IRGRP | S_IROTH);
 #endif
 	if(ofd < 0) {
 		printf("Error opening file %s\n", name);
 		exit(0);
 	}
-
-	// Disable buffering
-	FILE *file = fdopen(ofd, "a");
-	setvbuf(file, NULL, _IONBF, 0);
 
 	unsigned long long current_file_size = 
 #ifdef __APPLE__
@@ -719,18 +715,14 @@ int main(int argc, char **argv) {
 		}
 
 #ifdef __APPLE__
-		ofd = open(name, O_CREAT | O_RDWR, S_IRUSR | S_IWUSR | S_IRGRP | S_IROTH);
+		ofd = open(name, O_CREAT | O_WRONLY, S_IRUSR | S_IWUSR | S_IRGRP | S_IROTH);
 #else
-		ofd = open(name, O_CREAT | O_LARGEFILE | O_RDWR, S_IRUSR | S_IWUSR | S_IRGRP | S_IROTH);
+		ofd = open(name, O_CREAT | O_LARGEFILE | O_WRONLY, S_IRUSR | S_IWUSR | S_IRGRP | S_IROTH);
 #endif
 		if(ofd < 0) {
 			printf("Error opening file %s\n", name);
 			exit(0);
 		}
-
-		// Disable buffering
-		FILE *file = fdopen(ofd, "a");
-		setvbuf(file, NULL, _IONBF, 0);
 	}
 
 	if (current_file_size != file_size) {
