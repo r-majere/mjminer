@@ -426,7 +426,8 @@ unsigned long long getMS() {
 }
 
 void usage(char **argv) {
-	printf("Usage: %s -k KEY [-x CORE] [-d DIRECTORY] [-s STARTNONCE] [-n NONCES] [-m STAGGERSIZE] [-t THREADS] [-r RESTORE]\n", argv[0]);
+	printf("Usage: %s -k KEY [-x CORE] [-d DIRECTORY] [-s STARTNONCE] [-n NONCES] [-m STAGGERSIZE] [-t THREADS] [-r RESTORE] [-z]\n", argv[0]);
+	printf("    -z - Preallocate file only (do not fill it)\n");
 	printf("   CORE:\n");
 	printf("     0 - default core\n");
 	printf("     1 - SSE4 core\n");
@@ -443,6 +444,7 @@ int main(int argc, char **argv) {
 
 	int i;
 	int restore_step = 0;
+	int alloc_only = 0;
 	int startgiven = 0;
         for(i = 1; i < argc; i++) {
 		// Ignore unknown argument
@@ -505,6 +507,9 @@ int main(int argc, char **argv) {
 					break;
 				case 'x':
 					selecttype = parsed;
+					break;
+				case 'z':
+					alloc_only = 1;
 					break;
 				case 'd':
 					ds = strlen(parse);
