@@ -679,7 +679,7 @@ int main(int argc, char **argv) {
 			exit(-1);
 		}
 #else
-		int ret = fallocate(ofd, FALLOC_FL_ZERO_RANGE | FALLOC_FL_INSERT_RANGE | , off, chunkSize);
+		int ret = fallocate(ofd, FALLOC_FL_ZERO_RANGE | FALLOC_FL_INSERT_RANGE, off, chunkSize);
 		if (ret == -1) {
 			printf("Failed to expand file to size %llu (errno %d - %s).\n", off + chunkSize, errno, strerror(errno));
 			exit(-1);
