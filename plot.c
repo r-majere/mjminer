@@ -668,13 +668,14 @@ int main(int argc, char **argv) {
 #if defined(__APPLE__)
 		printf("Using fcntl::F_SETSIZE to expand file size to %lluGB\n", file_size/1024/1024/1024);
 #else
-		printf("Using fallocate to expand file size to %lluGB", file_size/1024/1024/1024);
+		printf("Using fallocate to expand file size to %lluGB\n", file_size/1024/1024/1024);
 #endif
 	}
 
 	unsigned long long off;
+	int error_alloc = 0;
 	for (off = current_file_size; off < file_size; off += chunkSize) {
-		printf("\rResizing file to %llu of %llu (%.2f)", off + chunkSize, file_size, (off + chunkSize) * 100.0 / file_size);
+		printf("\rResizing file to %llu of %llu (%.2f%%)", off + chunkSize, file_size, (off + chunkSize) * 100.0 / file_size);
 #if defined(__APPLE__)
 		unsigned long long result_size = off + chunkSize;
 		int ret = fcntl(ofd, F_SETSIZE, &result_size);
@@ -685,10 +686,51 @@ int main(int argc, char **argv) {
 #else
 		int ret = fallocate(ofd, FALLOC_FL_ZERO_RANGE, off, chunkSize);
 		if (ret == -1) {
-			printf("Failed to expand file to size %llu (errno %d - %s).\n", off + chunkSize, errno, strerror(errno));
-			exit(-1);
+			printf("\nFailed to expand file to size %llu (errno %d - %s).\n", off + chunkSize, errno, strerror(errno));
+			if (errno == 95) {
+				error_alloc = 1;
+				break;
+			}
+			else {
+				exit(-1);
+			}
 		}
 #endif
+	}
+
+	if (error_alloc) {
+		close(ofd);
+		printf("Using dd to expand file size to %lluGB\n", file_size/1024/1024/1024);
+		chunkSize *= 16;
+		for (off = current_file_size; off < file_size; off += chunkSize) {
+			printf("\rResizing file to %llu of %llu (%.2f%%)", off + chunkSize, file_size, (off + chunkSize) * 100.0 / file_size);
+			fflush(stdout);
+			char cmd[102400];
+			sprintf(cmd, "dd if=/dev/zero of='%s' bs=262144 count=%llu seek=%llu conv=notrunc &>/dev/null", name, chunkSize / PLOT_SIZE, off / PLOT_SIZE);
+			int ret = system(cmd);
+			if(ret == -1) {
+				printf("\nFailed set size %llu (errno %d - %s).\n", off + chunkSize, errno, strerror(errno));
+				exit(-1);
+			}
+			if (WIFSIGNALED(ret)) {
+          		printf("Exited with signal %d\n", WTERMSIG(ret));
+          		exit(-1);
+          	}
+		}
+
+#ifdef __APPLE__
+		ofd = open(name, O_CREAT | O_WRONLY, S_IRUSR | S_IWUSR | S_IRGRP | S_IROTH);
+#else
+		ofd = open(name, O_CREAT | O_LARGEFILE | O_WRONLY, S_IRUSR | S_IWUSR | S_IRGRP | S_IROTH);
+#endif
+		if(ofd < 0) {
+			printf("Error opening file %s\n", name);
+			exit(0);
+		}
+
+		// Disable buffering
+		FILE *file = fdopen(ofd, "a");
+		setvbuf(file, NULL, _IONBF, 0);
 	}
 
 	if (current_file_size != file_size) {
