@@ -732,12 +732,16 @@ int main(int argc, char **argv) {
 #endif
 		if(ofd < 0) {
 			printf("Error opening file %s\n", name);
-			exit(0);
+			exit(-1);
 		}
 	}
 
 	if (current_file_size != file_size) {
 		printf(" Done!\n");
+	}
+
+	if (alloc_only) {
+		exit(0);
 	}
 
 	// Threads:
