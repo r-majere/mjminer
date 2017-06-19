@@ -702,7 +702,7 @@ int main(int argc, char **argv) {
 			printf("\rResizing file to %llu of %llu (%.2f%%)", off + chunkSize, file_size, (off + chunkSize) * 100.0 / file_size);
 			fflush(stdout);
 			char cmd[102400];
-			sprintf(cmd, "dd if=/dev/zero of='%s' bs=262144 count=%llu seek=%llu conv=notrunc >/dev/null 2>&1", name, chunkSize / PLOT_SIZE, off / PLOT_SIZE);
+			sprintf(cmd, "dd if=/dev/zero of='%s' bs=262144 count=%llu seek=%llu conv=notrunc >/dev/null 2>&1", name, chunkSize / (PLOT_SIZE / 16), off / (PLOT_SIZE / 16));
 			int ret = system(cmd);
 			if(ret == -1) {
 				printf("\nFailed set size %llu (errno %d - %s).\n", off + chunkSize, errno, strerror(errno));
