@@ -655,7 +655,11 @@ int main(int argc, char **argv) {
 
 	if (current_file_size % chunkSize) {
 		current_file_size = current_file_size / chunkSize * chunkSize;
-		ftruncate(ofd, current_file_size);
+		int ret = ftruncate(ofd, current_file_size);
+		if(ret == -1) {
+			printf("Failed ftruncate file to size size %llu (errno %d - %s).\n", current_file_size, errno, strerror(errno));
+			exit(-1);
+		}
 	}
 
 	if (current_file_size == file_size) {
@@ -674,7 +678,7 @@ int main(int argc, char **argv) {
 #if defined(__APPLE__)
 		unsigned long long result_size = off + chunkSize;
 		int ret = fcntl(ofd, F_SETSIZE, &result_size);
-			if(ret == -1) {
+		if(ret == -1) {
 			printf("Failed set size %llu (errno %d - %s).\n", result_size, errno, strerror(errno));
 			exit(-1);
 		}
