@@ -399,8 +399,8 @@ void write_file(int ofd, unsigned long long start) {
 			printf("Error while file lseek (errno %d - %s).\n", errno, strerror(errno));
 			exit(-1);
 		}
-		int bytes_to_write = staggersize * SCOOP_SIZE;
-		int bytes_offset = 0;
+		unsigned long long bytes_to_write = (unsigned long long)staggersize * SCOOP_SIZE;
+		unsigned long long bytes_offset = 0;
 		while (bytes_to_write) {
 			unsigned long long offset = (unsigned long long)i * staggersize * SCOOP_SIZE + bytes_offset;
 			ret = write(ofd, cache_write + offset, bytes_to_write);
