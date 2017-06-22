@@ -426,7 +426,7 @@ unsigned long long getMS() {
 }
 
 void usage(char **argv) {
-	printf("Usage: %s -k KEY [-x CORE] [-d DIRECTORY] [-s STARTNONCE] [-n NONCES] [-m STAGGERSIZE] [-t THREADS] [-r RESTORE] [-z]\n", argv[0]);
+	printf("Usage: %s -k KEY [-x CORE] [-d DIRECTORY] [-s STARTNONCE] [-n NONCES] [-m STAGGERSIZE] [-t THREADS] [-b BYTES_PER_SECTOR] [-r RESTORE] [-z]\n", argv[0]);
 	printf("    -z - Preallocate file only (do not fill it)\n");
 	printf("   CORE:\n");
 	printf("     0 - default core\n");
@@ -446,6 +446,7 @@ int main(int argc, char **argv) {
 	int restore_step = 0;
 	int alloc_only = 0;
 	int startgiven = 0;
+	int bytesPerSector = 0;
         for(i = 1; i < argc; i++) {
 		// Ignore unknown argument
                 if(argv[i][0] != '-')
@@ -504,6 +505,9 @@ int main(int argc, char **argv) {
 					break;
 				case 't':
 					threads = parsed;
+					break;
+				case 'b':
+					bytesPerSector = parsed;
 					break;
 				case 'x':
 					selecttype = parsed;
@@ -565,6 +569,12 @@ int main(int argc, char **argv) {
 		fs -= FREE_SPACE;
 				
 		nonces = (unsigned long long)(fs / PLOT_SIZE);
+	}
+
+	// Adjust nonces
+	if (bytesPerSector && (nonces % (bytesPerSector / SCOOP_SIZE))) {
+		nonces = (nonces / (bytesPerSector / SCOOP_SIZE)) * (bytesPerSector / SCOOP_SIZE);
+		printf("Adjusted nonces to %i to optimize disk writing using %i bytes per sector\n", nonces, bytesPerSector);
 	}
 
 	// Autodetect stagger size
