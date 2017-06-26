@@ -614,7 +614,6 @@ int main(int argc, char **argv) {
 	// Adjust according to stagger size
 	if(nonces % staggersize != 0) {
 		nonces -= nonces % staggersize;
-		nonces += staggersize;
 		printf("Adjusting total nonces to %u to match stagger size\n", nonces);
 	}
 
@@ -665,7 +664,7 @@ int main(int argc, char **argv) {
 	unsigned long long chunkSize = nonces * SCOOP_SIZE;
 
 	if (current_file_size % chunkSize) {
-		current_file_size = current_file_size / chunkSize * chunkSize;
+		current_file_size -= current_file_size % chunkSize;
 		int ret = ftruncate(ofd, current_file_size);
 		if(ret == -1) {
 			printf("Failed ftruncate file to size size %llu (errno %d - %s).\n", current_file_size, errno, strerror(errno));
