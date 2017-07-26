@@ -29,6 +29,7 @@
 #include <pthread.h>
 #include <time.h>
 #include <sys/time.h>
+#include <errno.h>
 
 #include "shabal.h"
 #ifdef AVX2
@@ -42,7 +43,8 @@
 #define DEFAULTDIR	"plots/"
 
 // Not to be changed below this
-#define PLOT_SIZE	(4096 * 64)
+#define SCOOP_SIZE	64
+#define PLOT_SIZE	(4096 * SCOOP_SIZE)
 #define HASH_SIZE	32
 #define HASH_CAP	4096
 
@@ -69,6 +71,7 @@ unsigned int selecttype = 0;
 
 
 char *cache;
+char *cache_write;
 char *outputdir = DEFAULTDIR;
 
 #define BYTE_AT(val, at) (((char *)&(val))[at])
@@ -381,6 +384,41 @@ void *work_i(void *x_void_ptr) {
 	return NULL;
 }
 
+void write_file(int ofd, unsigned long long start) {
+	int i;
+	for (i = 0; i < HASH_CAP; i++) {
+		unsigned long long pos = (i * (unsigned long long)nonces + start) * SCOOP_SIZE;
+		unsigned long long ret = 
+#ifdef __APPLE__
+		lseek(
+#else
+		lseek64(
+#endif
+			    ofd, pos, SEEK_SET);
+		if (ret == -1 || ret != pos) {
+			printf("Error while file lseek (errno %d - %s).\n", errno, strerror(errno));
+			exit(-1);
+		}
+		unsigned long long bytes_to_write = (unsigned long long)staggersize * SCOOP_SIZE;
+		unsigned long long bytes_offset = 0;
+		while (bytes_to_write) {
+			unsigned long long offset = (unsigned long long)i * staggersize * SCOOP_SIZE + bytes_offset;
+			ret = write(ofd, cache_write + offset, bytes_to_write);
+			if (ret == -1) {
+				printf("Error while file write (errno %d - %s).\n", errno, strerror(errno));
+				exit(-1);
+			}
+			bytes_to_write -= ret;
+			bytes_offset += ret;
+		}
+	}
+
+	int ret = fsync(ofd);
+	if (ret == -1) {
+		printf("Error while file fsync (errno %d - %s).\n", errno, strerror(errno));
+	}
+}
+
 unsigned long long getMS() {
 	struct timeval time;
 	gettimeofday(&time, NULL);
@@ -388,7 +426,8 @@ unsigned long long getMS() {
 }
 
 void usage(char **argv) {
-	printf("Usage: %s -k KEY [ -x CORE ] [-d DIRECTORY] [-s STARTNONCE] [-n NONCES] [-m STAGGERSIZE] [-t THREADS]\n", argv[0]);
+	printf("Usage: %s -k KEY [-x CORE] [-d DIRECTORY] [-s STARTNONCE] [-n NONCES] [-m STAGGERSIZE] [-t THREADS] [-b BYTES_PER_SECTOR] [-r RESTORE] [-z]\n", argv[0]);
+	printf("    -z - Preallocate file only (do not fill it)\n");
 	printf("   CORE:\n");
 	printf("     0 - default core\n");
 	printf("     1 - SSE4 core\n");
@@ -404,7 +443,10 @@ int main(int argc, char **argv) {
 		usage(argv);
 
 	int i;
+	int restore_step = 0;
+	int alloc_only = 0;
 	int startgiven = 0;
+	int bytesPerSector = 0;
         for(i = 1; i < argc; i++) {
 		// Ignore unknown argument
                 if(argv[i][0] != '-')
@@ -464,8 +506,14 @@ int main(int argc, char **argv) {
 				case 't':
 					threads = parsed;
 					break;
+				case 'b':
+					bytesPerSector = parsed;
+					break;
 				case 'x':
 					selecttype = parsed;
+					break;
+				case 'z':
+					alloc_only = 1;
 					break;
 				case 'd':
 					ds = strlen(parse);
@@ -478,7 +526,10 @@ int main(int argc, char **argv) {
 					} else {
 						outputdir[ds] = 0;
 					}
-					
+					break;
+				case 'r':
+					restore_step = parsed;
+					break;
 			}			
 		}
         }
@@ -520,6 +571,12 @@ int main(int argc, char **argv) {
 		nonces = (unsigned long long)(fs / PLOT_SIZE);
 	}
 
+	// Adjust nonces
+	if (bytesPerSector && (nonces % (bytesPerSector / SCOOP_SIZE))) {
+		nonces = (nonces / (bytesPerSector / SCOOP_SIZE)) * (bytesPerSector / SCOOP_SIZE);
+		printf("Adjusted nonces to %i to optimize disk writing using %i bytes per sector\n", nonces, bytesPerSector);
+	}
+
 	// Autodetect stagger size
 	if(staggersize == 0) {
 		// use 80% of memory
@@ -540,6 +597,12 @@ int main(int argc, char **argv) {
 		}
 	}
 
+	staggersize /= 2; // Split on two parts for generation and writing to file simultaneously
+	printf("Total generation steps: %i\n", nonces / staggersize);
+	if (restore_step) {
+		printf("Restoring from step: %i\n", restore_step);
+	}
+
 	// 32 Bit and above 4GB?
 	if( sizeof( void* ) < 8 ) {
 		if( staggersize > 15000 ) {
@@ -551,11 +614,10 @@ int main(int argc, char **argv) {
 	// Adjust according to stagger size
 	if(nonces % staggersize != 0) {
 		nonces -= nonces % staggersize;
-		nonces += staggersize;
 		printf("Adjusting total nonces to %u to match stagger size\n", nonces);
 	}
 
-	printf("Creating plots for nonces %llu to %llu (%u GB) using %u MB memory and %u threads\n", startnonce, (startnonce + nonces), (unsigned int)(nonces / 4 / 953), (unsigned int)(staggersize / 4), threads);
+	printf("Creating plots for nonces %llu to %llu (%u GB) using %u MB memory and %u threads\n", startnonce, (startnonce + nonces), (unsigned int)(nonces / 4 / 953), (unsigned int)(staggersize / 2), threads);
 
 	// Comment this out/change it if you really want more than 200 Threads
 	if(threads > 200) {
@@ -564,6 +626,7 @@ int main(int argc, char **argv) {
 	}
 
 	cache = calloc( PLOT_SIZE, staggersize );
+	cache_write = calloc( PLOT_SIZE, staggersize );
 
 	if(cache == NULL) {
 		printf("Error allocating memory. Try lower stagger size.\n");
@@ -573,7 +636,7 @@ int main(int argc, char **argv) {
 	mkdir(outputdir, S_IRUSR | S_IWUSR | S_IXUSR | S_IRGRP | S_IROTH);
 
 	char name[100];
-	sprintf(name, "%s%llu_%llu_%u_%u", outputdir, addr, startnonce, nonces, staggersize);
+	sprintf(name, "%s%llu_%llu_%u_%u", outputdir, addr, startnonce, nonces, nonces);
 
 #ifdef __APPLE__
 	int ofd = open(name, O_CREAT | O_WRONLY, S_IRUSR | S_IWUSR | S_IRGRP | S_IROTH);
@@ -581,7 +644,112 @@ int main(int argc, char **argv) {
 	int ofd = open(name, O_CREAT | O_LARGEFILE | O_WRONLY, S_IRUSR | S_IWUSR | S_IRGRP | S_IROTH);
 #endif
 	if(ofd < 0) {
-		printf("Error opening file %s\n", name);
+		printf("Error while file open %s (errno %d - %s).\n", name, errno, strerror(errno));
+		exit(0);
+	}
+
+	unsigned long long current_file_size = 
+#ifdef __APPLE__
+		lseek(
+#else
+		lseek64(
+#endif
+			    ofd, 0, SEEK_END);
+	if (current_file_size == -1) {
+		printf("Error while file lseek (errno %d - %s).\n", errno, strerror(errno));
+		exit(-1);
+	}
+
+	unsigned long long file_size = ((unsigned long long) nonces) * PLOT_SIZE;
+	unsigned long long chunkSize = nonces * SCOOP_SIZE;
+
+	if (current_file_size % chunkSize) {
+		current_file_size -= current_file_size % chunkSize;
+		int ret = ftruncate(ofd, current_file_size);
+		if(ret == -1) {
+			printf("Failed ftruncate file to size size %llu (errno %d - %s).\n", current_file_size, errno, strerror(errno));
+			exit(-1);
+		}
+	}
+
+	if (current_file_size == file_size) {
+		printf("File size is already ok!\n");
+	} else {
+#if defined(__APPLE__)
+		printf("Using fcntl::F_SETSIZE to expand file size to %lluGB\n", file_size/1024/1024/1024);
+#else
+		printf("Using fallocate to expand file size to %lluGB\n", file_size/1024/1024/1024);
+#endif
+	}
+
+	unsigned long long off;
+	int error_alloc = 0;
+	for (off = current_file_size; off < file_size; off += chunkSize) {
+		printf("\rResizing file to %llu of %llu (%.2f%%)", off + chunkSize, file_size, (off + chunkSize) * 100.0 / file_size);
+#if defined(__APPLE__)
+		unsigned long long result_size = off + chunkSize;
+		int ret = fcntl(ofd, F_SETSIZE, &result_size);
+		if(ret == -1) {
+			printf("Failed set size %llu (errno %d - %s).\n", result_size, errno, strerror(errno));
+			exit(-1);
+		}
+#else
+		int ret = fallocate(ofd, FALLOC_FL_ZERO_RANGE, off, chunkSize);
+		if (ret == -1) {
+			printf("\nFailed to expand file to size %llu (errno %d - %s).\n", off + chunkSize, errno, strerror(errno));
+			if (errno == 95) {
+				error_alloc = 1;
+				break;
+			}
+			else {
+				exit(-1);
+			}
+		}
+#endif
+	}
+
+	if (error_alloc) {
+		int ret = ftruncate(ofd, current_file_size);
+		if(ret == -1) {
+			printf("Failed ftruncate file to size size %llu (errno %d - %s).\n", current_file_size, errno, strerror(errno));
+			exit(-1);
+		}
+		close(ofd);
+		
+		printf("Using dd to expand file size to %lluGB\n", file_size/1024/1024/1024);
+		chunkSize *= 16;
+		for (off = current_file_size; off < file_size; off += chunkSize) {
+			printf("\rResizing file to %llu of %llu (%.2f%%)", off + chunkSize, file_size, (off + chunkSize) * 100.0 / file_size);
+			fflush(stdout);
+			char cmd[102400];
+			sprintf(cmd, "dd if=/dev/zero of='%s' bs=262144 count=%llu seek=%llu conv=notrunc >/dev/null 2>&1", name, chunkSize / PLOT_SIZE, off / PLOT_SIZE);
+			int ret = system(cmd);
+			if(ret == -1) {
+				printf("\nFailed set size %llu (errno %d - %s).\n", off + chunkSize, errno, strerror(errno));
+				exit(-1);
+			}
+			if (WIFSIGNALED(ret)) {
+          		printf("Exited with signal %d\n", WTERMSIG(ret));
+          		exit(-1);
+          	}
+		}
+
+#ifdef __APPLE__
+		ofd = open(name, O_CREAT | O_WRONLY, S_IRUSR | S_IWUSR | S_IRGRP | S_IROTH);
+#else
+		ofd = open(name, O_CREAT | O_LARGEFILE | O_WRONLY, S_IRUSR | S_IWUSR | S_IRGRP | S_IROTH);
+#endif
+		if(ofd < 0) {
+			printf("Error opening file %s\n", name);
+			exit(-1);
+		}
+	}
+
+	if (current_file_size != file_size) {
+		printf(" Done!\n");
+	}
+
+	if (alloc_only) {
 		exit(0);
 	}
 
@@ -616,9 +784,11 @@ int main(int argc, char **argv) {
 		}
 	}
 
-	int run;
+	int need_to_write_cache = 0;
 
-	for(run = 0; run < nonces; run += staggersize) {
+	unsigned long long origin = startnonce;
+	unsigned long long finish = startnonce + nonces;
+	for(startnonce = origin + restore_step*staggersize; startnonce < finish; startnonce += staggersize) {
 		unsigned long long starttime = getMS();
 		for(i = 0; i < threads; i++) {
 			data[i].nonceoffset = startnonce + i * noncesperthread;
@@ -629,37 +799,43 @@ int main(int argc, char **argv) {
 			}
 		}
 
+		// Run leftover nonces
+		for(i=threads * noncesperthread; i<staggersize; i++) {
+			nonce(addr, startnonce + i, (unsigned long long)i);
+		}
+
+		// Write plot to disk:
+		if (need_to_write_cache) {
+			need_to_write_cache = 0;
+			write_file(ofd, startnonce - staggersize - origin);
+		}
+
 		// Wait for Threads to finish;
 		for(i=0; i<threads; i++) {
 			pthread_join(worker[i], NULL);
 		}
-		
-		// Run leftover nonces
-		for(i=threads * noncesperthread; i<staggersize; i++)
-			nonce(addr, startnonce + i, (unsigned long long)i);
 
-		// Write plot to disk:
-		unsigned long long bytes = (unsigned long long) staggersize * PLOT_SIZE;
-		unsigned long long position = 0;
-		do {
-			int b = write(ofd, &cache[position], bytes > 100000000 ? 100000000 : bytes);	// Dont write more than 100MB at once
-			position += b;
-			bytes -= b;
-		} while(bytes > 0);
+		void *tmp = cache;
+		cache = cache_write;
+		cache_write = tmp;
+		need_to_write_cache = 1;
 
 		unsigned long long ms = getMS() - starttime;
-		
-		int percent = (int)(100 * run / nonces);
+		float percent = 100.0 * (startnonce - origin + staggersize) / nonces;
 		double minutes = (double)ms / (1000000 * 60);
 		int speed = (int)(staggersize / minutes);
-		int m = (int)(nonces - run) / speed;
+		int m = (int)(origin + nonces - startnonce) / speed;
 		int h = (int)(m / 60);
 		m -= h * 60;
-
-		printf("\r%i Percent done. %i nonces/minute, %i:%02i left                ", percent, speed, h, m);
+		
+		printf("\r%.2f%% Percent done. %i nonces/minute, %i:%02i left (can restore from step %llu)               ", percent, speed, h, m, (startnonce - origin)/staggersize);
 		fflush(stdout);
+	}
 
-		startnonce += staggersize;
+	// Write plot to disk:
+	if (need_to_write_cache) {
+		need_to_write_cache = 0;
+		write_file(ofd, startnonce - staggersize - origin);
 	}
 
 	close(ofd);
