@@ -644,7 +644,7 @@ int main(int argc, char **argv) {
 	int ofd = open(name, O_CREAT | O_LARGEFILE | O_WRONLY, S_IRUSR | S_IWUSR | S_IRGRP | S_IROTH);
 #endif
 	if(ofd < 0) {
-		printf("Error opening file %s\n", name);
+		printf("Error while file open %s (errno %d - %s).\n", name, errno, strerror(errno));
 		exit(0);
 	}
 
